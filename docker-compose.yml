@@ -1,0 +1,30 @@
+# docker compose up --build   ->  http://localhost:8000/docs
+# Postgres is published on host port 5433 so it doesn't clash with a local install on 5432.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: bookverse
+      POSTGRES_PASSWORD: bookverse
+      POSTGRES_DB: bookverse
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bookverse -d bookverse"]
+      interval: 3s
+      retries: 20
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://bookverse:bookverse@db:5432/bookverse   # host is "db" inside Docker
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:

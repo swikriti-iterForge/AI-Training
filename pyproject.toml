@@ -1,0 +1,38 @@
+[project]
+name = "bookverse"
+version = "1.0.0"
+description = "BookVerse - REST API for an online bookstore"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic>=2",
+    "pydantic-settings",
+    "sqlalchemy[asyncio]>=2",
+    "alembic",
+    "psycopg2-binary",
+    "asyncpg",
+    "pwdlib[bcrypt]",
+    "pyjwt",
+    "python-multipart",
+    "requests",
+    "httpx",
+    "truststore",
+    "typer",
+]
+
+[project.scripts]
+bookverse = "bookverse.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.11.0,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

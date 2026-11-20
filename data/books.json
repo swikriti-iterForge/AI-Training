@@ -1,0 +1,14 @@
+[
+  {"title": "Atomic Habits", "author": "James Clear", "price": 18.99, "stock": 12, "isbn": "9780735211292", "year": 2018},
+  {"title": "Clean Code", "author": "Robert C. Martin", "price": 34.5, "stock": 4, "isbn": "9780132350884", "year": 2008},
+  {"title": "The Hobbit", "author": "J.R.R. Tolkien", "price": 9.99, "stock": 0, "isbn": "9780547928227", "year": 1937},
+  {"title": "Deep Work", "author": "Cal Newport", "price": 16.0, "stock": 7, "isbn": "9781455586691", "year": 2016},
+  {"title": "Dune", "author": "Frank Herbert", "price": 12.75, "stock": 3, "isbn": "9780441172719", "year": 1965},
+  {"title": "Fluent Python", "author": "Luciano Ramalho", "price": 49.99, "stock": 2, "isbn": "9781492056355", "year": 2022},
+  {"title": "Sapiens", "author": "Yuval Noah Harari", "price": 21.0, "stock": 9, "isbn": "9780062316097", "year": 2011},
+  {"title": "1984", "author": "George Orwell", "price": 8.5, "stock": 15, "isbn": "9780451524935", "year": 1949},
+  {"title": "The Pragmatic Programmer", "author": "Andrew Hunt", "price": 39.0, "stock": 0, "isbn": "9780135957059", "year": 1999},
+  {"title": "Educated", "author": "Tara Westover", "price": 14.25, "stock": 6, "isbn": "9780399590504", "year": 2018},
+  {"title": "Animal Farm", "author": "George Orwell", "price": 7.99, "stock": 11, "year": 1945},
+  {"title": "Children of Dune", "author": "Frank Herbert", "price": 13.5, "stock": 5, "year": 1976}
+]
