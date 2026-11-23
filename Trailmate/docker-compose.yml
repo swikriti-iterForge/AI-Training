@@ -1,0 +1,21 @@
+# PostgreSQL with the pgvector extension, for Phase 2 (vector search).
+#   docker compose up -d db
+# Host port 5434 (BookVerse uses 5433), so both can run at once.
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: trailmate
+      POSTGRES_PASSWORD: trailmate
+      POSTGRES_DB: trailmate
+    ports:
+      - "5434:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trailmate -d trailmate"]
+      interval: 3s
+      retries: 20
+
+volumes:
+  pgdata:

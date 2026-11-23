@@ -1,0 +1,38 @@
+[project]
+name = "trailmate-agent"
+version = "0.1.0"
+description = "TrailMate workflow + agent service (LangGraph, FastAPI, SSE)"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "sse-starlette",
+    "pydantic>=2",
+    "pydantic-settings",
+    "langgraph",
+    "openai",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.0,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio", "httpx", "ruff", "mypy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]  # user-facing messages and regexes are naturally long
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true

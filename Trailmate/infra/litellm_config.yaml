@@ -1,0 +1,26 @@
+# LiteLLM proxy config. The app only ever asks for a TIER name ("fast", "smart").
+# To change which model sits behind a tier, edit this file and restart the proxy:
+# no application code changes.
+#
+# Models run in Ollama on your machine (CPU only on your laptop). Pull them first:
+#   ollama pull qwen2.5:3b
+#   ollama pull qwen2.5:7b          (slower and bigger: ~5 GB of RAM)
+model_list:
+  - model_name: fast
+    litellm_params:
+      model: ollama_chat/qwen2.5:3b
+      api_base: http://localhost:11434
+
+  - model_name: smart
+    litellm_params:
+      model: ollama_chat/qwen2.5:7b
+      api_base: http://localhost:11434
+
+  # Candidates for the Stage 6 model comparison (uncomment once pulled):
+  # - model_name: llama-3b
+  #   litellm_params:
+  #     model: ollama_chat/llama3.2:3b
+  #     api_base: http://localhost:11434
+
+litellm_settings:
+  drop_params: true   # silently ignore request options a model doesn't support
