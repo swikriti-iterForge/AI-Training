@@ -1,16 +1,31 @@
-"""Settings, read from TRAILMATE_* environment variables or a .env file."""
+"""Settings, read from environment variables or the project's .env file."""
 
 from functools import lru_cache
+from pathlib import Path
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Trailmate/.env: shared with scripts/start_litellm.py, so the proxy and the agent use ONE key.
+ROOT_ENV = Path(__file__).resolve().parents[4] / ".env"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="TRAILMATE_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="TRAILMATE_",
+        env_file=(ROOT_ENV, ".env"),
+        extra="ignore",
+        populate_by_name=True,
+    )
 
-    # The LiteLLM proxy speaks the OpenAI API, so we only need a base URL.
+    # The LiteLLM proxy speaks the OpenAI API, so we only need a base URL and a key.
     litellm_base_url: str = "http://localhost:4000/v1"
-    litellm_api_key: str = "not-needed-locally"  # the local proxy runs without auth
+    # Must equal the proxy's LITELLM_MASTER_KEY. `python scripts/start_litellm.py` creates it
+    # in .env; TRAILMATE_LITELLM_API_KEY overrides it if you ever need a different one.
+    litellm_api_key: str = Field(
+        default="not-set",
+        validation_alias=AliasChoices("TRAILMATE_LITELLM_API_KEY", "LITELLM_MASTER_KEY"),
+    )
     # Named model tiers (defined in infra/litellm_config.yaml). The app never names a real model.
     tiers: list[str] = ["fast", "smart"]
     default_tier: str = "fast"

@@ -26,11 +26,25 @@ CERT_HINT = (
 )
 
 
-def http(url: str, payload: dict | None = None, timeout: float = 120.0) -> tuple[int, str]:
+def http(url: str, payload: dict | None = None, timeout: float = 120.0, headers: dict | None = None) -> tuple[int, str]:
     data = json.dumps(payload).encode() if payload is not None else None
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json", **(headers or {})})
     with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
         return resp.status, resp.read().decode()
+
+
+def load_master_key() -> str | None:
+    """LITELLM_MASTER_KEY from the environment, or from Trailmate/.env (created by start_litellm.py)."""
+    if os.environ.get("LITELLM_MASTER_KEY"):
+        return os.environ["LITELLM_MASTER_KEY"]
+    env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
+    try:
+        for line in open(env_file, encoding="utf-8"):
+            if line.strip().startswith("LITELLM_MASTER_KEY="):
+                return line.split("=", 1)[1].strip().strip("\"'")
+    except OSError:
+        pass
+    return None
 
 
 def check_memory() -> tuple[str, str]:
@@ -80,13 +94,17 @@ def check_litellm() -> tuple[str, str]:
     try:
         http(f"{LITELLM}/health/liveliness", timeout=5)
     except Exception as exc:  # noqa: BLE001
-        return FAIL, (f"LiteLLM not reachable at {LITELLM} ({exc}). Start it:  "
-                      'uvx --from "litellm[proxy]" litellm --config infra/litellm_config.yaml --port 4000')
+        return FAIL, (f"LiteLLM not reachable at {LITELLM} ({exc}). Start it:  python scripts/start_litellm.py")
+    key = load_master_key()
+    if not key:
+        return FAIL, "LiteLLM is up but no LITELLM_MASTER_KEY found. Run `python scripts/start_litellm.py` once; it creates one in .env."
     try:
         _, out = http(f"{LITELLM}/v1/chat/completions", {"model": "fast", "max_tokens": 24,
-                      "messages": [{"role": "user", "content": "Say hello in five words."}]})
+                      "messages": [{"role": "user", "content": "Say hello in five words."}]},
+                      headers={"Authorization": f"Bearer {key}"})
     except urllib.error.HTTPError as exc:
-        return FAIL, f"LiteLLM is up but tier 'fast' failed: HTTP {exc.code} {exc.read().decode()[:200]}"
+        hint = " The key in .env doesn't match the one LiteLLM started with: restart LiteLLM." if exc.code == 401 else ""
+        return FAIL, f"LiteLLM is up but tier 'fast' failed: HTTP {exc.code} {exc.read().decode()[:200]}{hint}"
     except Exception as exc:  # noqa: BLE001
         return FAIL, f"LiteLLM is up but tier 'fast' failed ({exc})"
     text = json.loads(out)["choices"][0]["message"]["content"].strip()

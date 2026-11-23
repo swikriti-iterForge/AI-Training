@@ -13,7 +13,7 @@ model_list:
 
   - model_name: smart
     litellm_params:
-      model: ollama_chat/qwen2.5:7b
+      model: ollama_chat/llama3.2:3b
       api_base: http://localhost:11434
 
   # Candidates for the Stage 6 model comparison (uncomment once pulled):

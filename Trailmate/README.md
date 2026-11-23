@@ -26,14 +26,24 @@ ollama pull qwen2.5:7b          # tier "smart"  (~5 GB, slow on CPU; optional fo
 # 2. PostgreSQL + pgvector (used from Stage 2)
 docker compose up -d db
 
-# 3. LiteLLM proxy (leave this terminal open)
-uvx --from "litellm[proxy]" litellm --config infra/litellm_config.yaml --port 4000
+# 3. LiteLLM proxy (leave this terminal open).
+#    First run creates a random LITELLM_MASTER_KEY in .env (LiteLLM refuses to start without
+#    one). The agent and the smoke test read the same file. .env is git-ignored: never commit it.
+python scripts/start_litellm.py
 
 # 4. In a new terminal: check everything
 python scripts/smoke_test.py
 ```
 
 Fix any `FAIL` top to bottom and re-run. Don't move on until the Ollama and LiteLLM checks pass.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| LiteLLM exits with `no master key is set` | Start it with `python scripts/start_litellm.py` (it creates the key), not a bare `uvx` command |
+| Smoke test says `HTTP 401` from LiteLLM | `.env` and the running proxy disagree: stop LiteLLM and start it again with the script |
+| Trail questions answer "trouble reaching my language model" | `python scripts/chat.py "..." --verbose` shows the real reason in `error`; restart the agent after any `.env` change |
 
 ## Run the agent (Stage 1)
 
