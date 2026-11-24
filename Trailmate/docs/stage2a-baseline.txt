@@ -1,0 +1,79 @@
+﻿
+#1  PASS  I want an easy trail near water for tomorrow morning
+     expected: silver-lake-circuit or hidden-spring-trail or cascade-falls-loop   (first expected trail at rank 1)
+     1.* Hidden Spring Trail        score 0.607  (Details)
+     2.  Rocky Point Trail          score 0.588  (Trail Notes)
+     3.  Thunder Gorge Trail        score 0.549  (Details)
+
+#2  PASS  Something short and dog-friendly, totally flat
+     expected: willow-creek-wander or old-mill-loop   (first expected trail at rank 2)
+     1.  Hidden Spring Trail        score 0.399  (Overview)
+     2.* Old Mill Loop              score 0.389  (Overview)
+     3.  Ridgeline Overlook         score 0.380  (Details)
+
+#3  FAIL  Looking for a hard scramble with a waterfall
+     expected: thunder-gorge-trail   (first expected trail at rank 3)
+     1.  Cascade Falls Loop         score 0.486  (Overview)
+     2.  Blackrock Summit           score 0.470  (Overview)
+     3.* Thunder Gorge Trail        score 0.436  (Overview)
+
+#4  PASS  Best sunset viewpoint hike
+     expected: sunset-bluff-trail   (first expected trail at rank 1)
+     1.* Sunset Bluff Trail         score 0.649  (Details)
+     2.  Ridgeline Overlook         score 0.615  (Trail Notes)
+     3.  Rocky Point Trail          score 0.481  (Details)
+
+#5  PASS  Family hike with wildflowers, nothing too long
+     expected: meadowbrook-path   (first expected trail at rank 1)
+     1.* Meadowbrook Path           score 0.547  (Details)
+     2.  Fern Valley Loop           score 0.478  (Details)
+     3.  Willow Creek Wander        score 0.471  (Details)
+
+#6  PASS  Alpine trail where I might see snow
+     expected: timberline-pass   (first expected trail at rank 2)
+     1.  Silver Lake Circuit        score 0.531  (Overview)
+     2.* Timberline Pass            score 0.531  (Overview)
+     3.  Hidden Spring Trail        score 0.531  (Details)
+
+#7  PASS  Coastal hike with some exposure
+     expected: rocky-point-trail   (first expected trail at rank 1)
+     1.* Rocky Point Trail          score 0.580  (Overview)
+     2.  Ridgeline Overlook         score 0.511  (Trail Notes)
+     3.  Sunset Bluff Trail         score 0.501  (Details)
+
+#8  PASS  Quiet forest trail with a creek crossing
+     expected: fern-valley-loop   (first expected trail at rank 1)
+     1.* Fern Valley Loop           score 0.655  (Trail Notes)
+     2.  Willow Creek Wander        score 0.642  (Trail Notes)
+     3.  Hidden Spring Trail        score 0.623  (Overview)
+
+#9  FAIL  A waterfall hike but not too crowded
+     expected: cascade-falls-extension above cascade-falls-loop   (first expected trail at rank 2)
+     1.  Cascade Falls Loop         score 0.564  (Overview)
+     2.* Cascade Falls Extension    score 0.551  (Details)
+     3.  Thunder Gorge Trail        score 0.545  (Overview)
+
+#10 PASS  Steep climb with a big payoff view, I don't mind exposure
+     expected: eagles-perch-trail or blackrock-summit   (first expected trail at rank 1)
+     1.* Blackrock Summit           score 0.504  (Details)
+     2.  Ridgeline Overlook         score 0.481  (Trail Notes)
+     3.  Sunset Bluff Trail         score 0.450  (Overview)
+
+#11 PASS  quiet version of the popular waterfall hike
+     expected: cascade-falls-extension above cascade-falls-loop   (first expected trail at rank 1)
+     1.* Cascade Falls Extension    score 0.535  (Details)
+     2.  Cascade Falls Loop         score 0.534  (Overview)
+     3.  Thunder Gorge Trail        score 0.512  (Details)
+
+#12 PASS  flat easy dog-friendly walk with some history or old ruins
+     expected: old-mill-loop above willow-creek-wander   (first expected trail at rank 1)
+     1.* Old Mill Loop              score 0.598  (Overview)
+     2.  Willow Creek Wander        score 0.466  (Overview)
+     3.  Hidden Spring Trail        score 0.461  (Details)
+
+----------------------------------------------------------------
+Passed 10/12   (normal: expected trail in top 2; pair: right trail above its near-duplicate)
+Near-duplicate pairs: 2/3
+First expected trail at rank 1: 8/12 | within top 2: 11/12 | within top 3: 12/12
+Search latency (embed + search): mean 61 ms, max 284 ms
+* = an expected trail

@@ -1,0 +1,14 @@
+[
+  {"id": 1, "query": "I want an easy trail near water for tomorrow morning", "relevant": ["silver-lake-circuit", "hidden-spring-trail", "cascade-falls-loop"]},
+  {"id": 2, "query": "Something short and dog-friendly, totally flat", "relevant": ["willow-creek-wander", "old-mill-loop"]},
+  {"id": 3, "query": "Looking for a hard scramble with a waterfall", "relevant": ["thunder-gorge-trail"]},
+  {"id": 4, "query": "Best sunset viewpoint hike", "relevant": ["sunset-bluff-trail"]},
+  {"id": 5, "query": "Family hike with wildflowers, nothing too long", "relevant": ["meadowbrook-path"]},
+  {"id": 6, "query": "Alpine trail where I might see snow", "relevant": ["timberline-pass"]},
+  {"id": 7, "query": "Coastal hike with some exposure", "relevant": ["rocky-point-trail"]},
+  {"id": 8, "query": "Quiet forest trail with a creek crossing", "relevant": ["fern-valley-loop"]},
+  {"id": 9, "query": "A waterfall hike but not too crowded", "relevant": ["cascade-falls-extension"], "must_outrank": "cascade-falls-loop"},
+  {"id": 10, "query": "Steep climb with a big payoff view, I don't mind exposure", "relevant": ["eagles-perch-trail", "blackrock-summit"]},
+  {"id": 11, "query": "quiet version of the popular waterfall hike", "relevant": ["cascade-falls-extension"], "must_outrank": "cascade-falls-loop"},
+  {"id": 12, "query": "flat easy dog-friendly walk with some history or old ruins", "relevant": ["old-mill-loop"], "must_outrank": "willow-creek-wander"}
+]
