@@ -8,9 +8,10 @@ frontend → observability. **Python only** (FastAPI, LangGraph, pgvector, LiteL
 | Stage | What | State |
 |---|---|---|
 | 0.5 | Environment smoke test | ✅ `scripts/smoke_test.py` |
-| 1 | Workflow: LangGraph, rule routing, guardrails, SSE, LiteLLM tiers | ✅ built, 61 tests pass; **not yet run against a real model** |
-| 2 | Embedder, pgvector, hybrid search, evaluation | next |
-| 3 | Agent, tools, memory, explainable recommendations | |
+| 1 | Workflow: LangGraph, rule routing, guardrails, SSE, LiteLLM tiers | ✅ done. Verified with a real model (`fast` and `smart` tiers) |
+| 2A | Embedder, pgvector, ingestion, vector search, query validation | ✅ done. Real model, 10/12 on the test queries (baseline) |
+| 2B | Hybrid search (keyword + RRF), chunking experiments, evaluation harness | **deferred until after Phase 3.** Baseline: 10/12; targets are query #3 (hard scramble + waterfall) and #9 (Extension must outrank Loop) |
+| 3 | Agent, tools, memory, explainable recommendations | **next.** Step 1: `scripts/tool_call_check.py` (can the local models call a tool correctly?) |
 | 4 | React frontend and dashboard | |
 | 5 | Langfuse, structlog, metrics | |
 
@@ -92,6 +93,66 @@ START → input_guard ──blocked──────────────►
   it rejects a reply it sends `replace` to swap the text already shown.
 - **Failures:** model down or slow → a fixed fallback message, not a crash.
 - **Every node is timed**; timings and the visited-node trace come back in the `done` event.
+
+## Stage 2A: vector search
+
+Finds trails by *meaning*, so "quiet version of the popular waterfall hike" can match a trail whose text never
+says "quiet version". Two small services plus a database:
+
+```
+POST /search ──► trailmate-search (:8002) ──► trailmate-embedder (:8001)   text → 384 numbers
+                      │
+                      └─► PostgreSQL + pgvector (:5434)   closest chunks by cosine distance, one per trail
+```
+
+**Run it** (four terminals; start from the Trailmate folder, `docker compose up -d db` first):
+
+```powershell
+# A. Embedder. The first `uv sync` is large (it installs PyTorch) and the first start downloads a ~90 MB model
+cd services\embedder
+uv sync
+uv run uvicorn trailmate_embedder.main:app --port 8001      # wait for "Application startup complete"
+
+# B. Search: create tables, load the 16 trails, start the service
+cd services\search
+uv sync
+uv run alembic upgrade head
+uv run python -m trailmate_search.ingest                    # expect: Ingested 16 trails as 51 chunks
+uv run uvicorn trailmate_search.main:app --port 8002
+
+# C. Validate against the 10 provided test queries + the 2 near-duplicate pair queries
+python eval/check_queries.py
+```
+
+Try it by hand: open http://localhost:8002/docs, or `GET http://localhost:8002/trails/cascade-falls-loop`.
+`GET /health` shows how many trails and chunks are loaded.
+
+**How it works**
+
+1. **Chunking (`parsing.py`):** each trail file is split by its `##` headings into chunks. Each chunk is prefixed with
+   the trail name and section before embedding ("Cascade Falls Loop - Trail Notes: ..."), so a chunk's vector stays
+   tied to *which* trail it belongs to. That is what keeps the near-duplicate trails apart.
+2. **Facts vs text:** difficulty, distance, elevation, "best for" and dogs policy are parsed into real columns and
+   returned as `facts`. Later, the agent states these from the database, never from the LLM.
+3. **Search (`main.py`):** embed the query, compare it with every chunk using cosine distance, keep only the best chunk
+   per trail (`DISTINCT ON`), return the top trails with the matching text as evidence.
+4. The chunk table has a `strategy` column so Stage 2B can store other chunking strategies side by side.
+
+At 51 chunks an exact scan is instant, so there is no ANN index (HNSW). It would not help here, because the
+one-chunk-per-trail rule needs the exact scan. At a much larger scale you would add one and de-duplicate afterwards.
+
+**Troubleshooting**
+
+| Symptom | Fix |
+|---|---|
+| Embedder fails while downloading the model with a certificate error | Company-proxy certificates again. Tell me the exact error. |
+| `uv sync` in `services\embedder` is very slow | Normal the first time: it downloads PyTorch. |
+| `alembic upgrade head` can't connect | `docker compose up -d db`, and wait until `docker compose ps` shows `healthy` |
+| `ingest` says it cannot reach the embedder | Terminal A isn't running or hasn't finished starting |
+| `check_queries.py` says HTTP 503 | The search service can't reach the embedder on port 8001 |
+
+Tests: `uv run pytest -q` inside `services\embedder` (no database needed) and `services\search` (needs the `db` container;
+they use a separate `trailmate_search_test` database and skip with a message if Postgres isn't running).
 
 ## Dataset (`data/`)
 
