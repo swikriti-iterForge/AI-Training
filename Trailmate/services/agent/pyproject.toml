@@ -11,6 +11,7 @@ dependencies = [
     "pydantic-settings",
     "langgraph",
     "openai",
+    "httpx",
 ]
 
 [build-system]

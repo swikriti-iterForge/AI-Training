@@ -105,5 +105,6 @@ USER_MESSAGES = {
     "output_too_long": "Sorry, my answer got out of hand. Could you ask a narrower question?",
     "prompt_leak": "Sorry, I can't share that. What kind of hike are you looking for?",
     "unsupported_claim": "I don't have live information such as current conditions, so I'd rather not guess. I can help with the trail details I have.",
+    "ungrounded_numbers": "I can only quote distances and climbs from my trail data, and I don't have a match for that yet. Tell me what kind of trail you want and I'll search for it.",
     "unsafe_output": "Sorry, I can't answer that one. Could you rephrase your question?",
 }

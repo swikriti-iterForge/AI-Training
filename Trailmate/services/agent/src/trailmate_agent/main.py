@@ -1,11 +1,17 @@
 """FastAPI app: POST /chat streams the answer as Server-Sent Events.
 
-SSE events (every path emits the same sequence, so the client has one code path):
-  meta     {request_id, tier}                      first
-  route    {path}                                  which branch the message took
+Two modes run the same message through different graphs, so you can compare them:
+  workflow  Phase 1: rule-based routing, the model only writes generic text (no trail data)
+  agent     Phase 3: the model decides when to call the search tool; answers use real trail data
+
+SSE events (every path emits the same core sequence, so the client has one code path):
+  meta     {request_id, tier, mode}                first
+  route    {path, reason}                          which branch the message took
+  tool     {name, status, label, ms?}              agent mode: tool activity ("Searching hiking trails...")
+  results  {trails: [...]}                         agent mode: the retrieved trails, with facts from the database
   token    {text}                                  a piece of the reply (templated replies: ONE token)
   replace  {text}                                  a guardrail swapped the text already streamed
-  done     {category, reply_source, trace, timings_ms, total_ms, ...}
+  done     {category, decision, reply_source, tool_calls, trace, timings_ms, total_ms, ...}
   error    {message}                               only on an unexpected crash
 """
 
@@ -14,19 +20,24 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any
+from contextlib import asynccontextmanager
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
+from trailmate_agent.agent_graph import build_agent_graph
 from trailmate_agent.config import Settings, get_settings
 from trailmate_agent.graph import build_graph
 from trailmate_agent.guardrails import load_config
 from trailmate_agent.llm import LiteLLMClient, LLMClient
+from trailmate_agent.tools import HttpTrailSearch, TrailSearch
 
 logger = logging.getLogger("trailmate.agent")
+
+Mode = Literal["workflow", "agent"]
 
 
 class ChatRequest(BaseModel):
@@ -34,26 +45,48 @@ class ChatRequest(BaseModel):
     # message; this larger cap just protects the server from huge payloads.
     message: str = Field(max_length=10_000)
     model: str | None = Field(default=None, description="Model tier, e.g. 'fast' or 'smart'")
+    mode: Mode = Field(default="workflow", description="'workflow' (Phase 1) or 'agent' (Phase 3)")
 
 
 def sse(event: str, data: dict[str, Any]) -> dict[str, str]:
     return {"event": event, "data": json.dumps(data)}
 
 
-def create_app(llm: LLMClient | None = None, settings: Settings | None = None) -> FastAPI:
+def create_app(
+    llm: LLMClient | None = None,
+    settings: Settings | None = None,
+    search: TrailSearch | None = None,
+) -> FastAPI:
     settings = settings or get_settings()
     llm = llm or LiteLLMClient(settings)
-    graph = build_graph(llm, load_config(settings.guardrail_config_path))
-    app = FastAPI(title="TrailMate agent", version="0.1.0")
+    search = search or HttpTrailSearch(settings.search_url, settings.search_timeout_s)
+    guardrails = load_config(settings.guardrail_config_path)
+    graphs = {
+        "workflow": build_graph(llm, guardrails),
+        "agent": build_agent_graph(llm, search, guardrails, settings),
+    }
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        yield
+        if isinstance(search, HttpTrailSearch):
+            await search.aclose()
+
+    app = FastAPI(title="TrailMate agent", version="0.2.0", lifespan=lifespan)
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
-        return {"status": "ok", "tiers": settings.tiers, "default_tier": settings.default_tier}
+        return {
+            "status": "ok",
+            "tiers": settings.tiers,
+            "default_tier": settings.default_tier,
+            "modes": list(graphs),
+        }
 
     @app.get("/graph", response_class=PlainTextResponse)
-    async def graph_diagram() -> str:
-        """The workflow as a Mermaid diagram - paste it into https://mermaid.live to see it."""
-        return graph.get_graph().draw_mermaid()
+    async def graph_diagram(mode: Mode = "workflow") -> str:
+        """The graph as a Mermaid diagram - paste it into https://mermaid.live to see it."""
+        return graphs[mode].get_graph().draw_mermaid()
 
     @app.post("/chat")
     async def chat(body: ChatRequest, request: Request) -> EventSourceResponse:
@@ -63,18 +96,22 @@ def create_app(llm: LLMClient | None = None, settings: Settings | None = None) -
                 422, f"Unknown model tier '{tier}'. Choose one of {settings.tiers}."
             )
         request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:12]
+        graph = graphs[body.mode]
 
         async def events() -> AsyncIterator[dict[str, str]]:
             started = time.perf_counter()
-            yield sse("meta", {"request_id": request_id, "tier": tier})
+            yield sse("meta", {"request_id": request_id, "tier": tier, "mode": body.mode})
             final: dict[str, Any] = {}
             routed = False
             try:
-                async for mode, chunk in graph.astream(
+                async for stream_kind, chunk in graph.astream(
                     {"message": body.message, "tier": tier}, stream_mode=["custom", "values"]
                 ):
-                    if mode == "custom":  # token / replace, written by a node
-                        yield sse(chunk["type"], {"text": chunk["text"]})
+                    if (
+                        stream_kind == "custom"
+                    ):  # token / replace / tool / results, written by a node
+                        payload = dict(chunk)
+                        yield sse(payload.pop("type"), payload)
                         continue
                     final = chunk  # full state after each step; the last one is the result
                     if not routed and (final.get("blocked") or final.get("category")):
@@ -89,18 +126,26 @@ def create_app(llm: LLMClient | None = None, settings: Settings | None = None) -
                 return
             total_ms = round((time.perf_counter() - started) * 1000, 1)
             logger.info(
-                "request %s %s via %s in %sms", request_id, final.get("category"), tier, total_ms
+                "request %s %s/%s via %s in %sms",
+                request_id,
+                body.mode,
+                final.get("category"),
+                tier,
+                total_ms,
             )
             yield sse(
                 "done",
                 {
                     "request_id": request_id,
                     "tier": tier,
+                    "mode": body.mode,
                     "category": final.get("category"),
+                    "decision": final.get("decision"),
                     "blocked": bool(final.get("blocked")),
                     "block_reason": final.get("block_reason") or None,
                     "reply_source": final.get("reply_source"),
                     "error": final.get("error"),
+                    "tool_calls": final.get("tool_calls", []),
                     "trace": final.get("trace", []),
                     "timings_ms": final.get("timings", {}),
                     "total_ms": total_ms,

@@ -108,3 +108,40 @@ REJECT_REPLY = (
     "I can't help with that one. I don't have live information like current weather or "
     "trail conditions, and I stick to hiking trails. Ask me about a trail and I'm glad to help."
 )
+
+
+# ---------- Agent mode (Phase 3) ----------
+# Rules still handle the obvious cases (greetings, thanks, weather refusals). The model only sees the rest.
+
+# Words that say nothing about WHAT the user wants. If nothing else is left, the request is too vague.
+FILLER_WORDS = set(
+    """a an the i me my we us you your want need would like looking look for to of in on at near around
+    find show suggest recommend give tell about some any good nice great best cool new another different
+    something anything please can could help is are be do does it that this there one ones place places
+    spot spots trip outing trail trails trailhead hike hikes hiking hiker trek treks trekking walk walks
+    walking route routes path paths option options idea ideas""".split()
+)
+
+
+def triage(message: str) -> Literal["chat", "reject", "agent"]:
+    """Who handles this message: a templated reply, a refusal, or the model."""
+    text = message.lower()
+    if any(re.search(p, text) for p in REJECT_PATTERNS):
+        return "reject"
+    if set(re.findall(r"[a-z][a-z-]*", text)) & set(TRAIL_KEYWORDS):
+        return "agent"  # it is about trails: let the model decide what to do
+    if chat_kind(message) != "unknown":
+        return "chat"  # greeting, thanks, goodbye, "what can you do"
+    return "agent"
+
+
+def is_vague(message: str) -> bool:
+    """True if, once filler words are removed, nothing is left to search for ('Suggest a good trek')."""
+    return not [w for w in re.findall(r"[a-z][a-z-]*", message.lower()) if w not in FILLER_WORDS]
+
+
+def mentions_location(message: str) -> bool:
+    """Crude: 'near Mumbai', 'around Pune', 'in Lonavala'. Our data has no locations, so we say so."""
+    return bool(
+        re.search(r"\b(?:near|around|in|close to|outside)\s+(?:the\s+)?[A-Z][a-zA-Z]+", message)
+    )

@@ -30,6 +30,14 @@ class Settings(BaseSettings):
     tiers: list[str] = ["fast", "smart"]
     default_tier: str = "fast"
     llm_timeout_s: float = 90.0  # CPU-only models can be slow
+    # trailmate-search: the tool the agent calls
+    search_url: str = "http://localhost:8002"
+    search_timeout_s: float = 20.0
+    # Two results closer than this in score count as a tie, and the agent compares them instead of picking.
+    # 0.01 is a starting guess from 12 test queries, not a tuned value.
+    tie_margin: float = 0.01
+    # False = write the recommendation from a template instead of asking the model (faster, less natural)
+    explain_with_llm: bool = True
     # Optional JSON file overriding guardrail rules (see guardrails.GuardrailConfig)
     guardrail_config_path: str | None = None
 

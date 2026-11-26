@@ -80,33 +80,43 @@ def timed(name: str) -> Callable:
     return decorator
 
 
-def build_graph(llm: LLMClient, cfg: GuardrailConfig):
-    """Build and compile the graph. Dependencies are passed in (like constructor injection)."""
+# ---- Nodes shared by the workflow graph (this file) and the agent graph (agent_graph.py) ----
 
+
+def make_input_guard(cfg: GuardrailConfig) -> Callable:
     @timed("input_guard")
     async def input_guard(state: State) -> dict[str, Any]:
         result = check_input(state["message"], cfg)
         return {"blocked": not result.ok, "block_reason": result.reason or ""}
 
+    return input_guard
+
+
+@timed("chat_reply")
+async def chat_reply_node(state: State) -> dict[str, Any]:
+    reply = CHAT_REPLIES[chat_kind(state["message"])]
+    # Templated paths have no tokens, so the whole reply goes out as ONE token event.
+    get_stream_writer()({"type": "token", "text": reply})
+    return {"reply": reply, "reply_source": "template"}
+
+
+@timed("reject")
+async def reject_node(state: State) -> dict[str, Any]:
+    reply = USER_MESSAGES[state["block_reason"]] if state.get("blocked") else REJECT_REPLY
+    get_stream_writer()({"type": "token", "text": reply})
+    return {"reply": reply, "reply_source": "template"}
+
+
+def build_graph(llm: LLMClient, cfg: GuardrailConfig):
+    """Build and compile the graph. Dependencies are passed in (like constructor injection)."""
+
+    input_guard = make_input_guard(cfg)
+
     @timed("classify")
     async def classify_node(state: State) -> dict[str, Any]:
         return {"category": classify(state["message"])}
 
-    @timed("chat_reply")
-    async def chat_reply(state: State) -> dict[str, Any]:
-        reply = CHAT_REPLIES[chat_kind(state["message"])]
-        # Templated paths have no tokens, so the whole reply goes out as ONE token event.
-        get_stream_writer()({"type": "token", "text": reply})
-        return {"reply": reply, "reply_source": "template"}
-
-    @timed("reject")
-    async def reject(state: State) -> dict[str, Any]:
-        if state.get("blocked"):
-            reply = USER_MESSAGES[state["block_reason"]]
-        else:
-            reply = REJECT_REPLY
-        get_stream_writer()({"type": "token", "text": reply})
-        return {"reply": reply, "reply_source": "template"}
+    chat_reply, reject = chat_reply_node, reject_node
 
     @timed("trail_reply")
     async def trail_reply(state: State) -> dict[str, Any]:

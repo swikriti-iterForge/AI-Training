@@ -1,0 +1,78 @@
+"""Replies written by code, not by the model: fixed text built only from retrieved facts.
+
+Used when the request is too vague (ask), when two trails are nearly tied (compare them honestly),
+and as the fallback when the model cannot write an explanation.
+"""
+
+from trailmate_agent.tools import TrailHit
+
+CLARIFY_QUESTION = (
+    "Happy to help you find a trail! What matters most: how hard it should be (easy or challenging), "
+    "how long it should be, or what you'd like to see (a waterfall, a view, forest)?"
+)
+LOCATION_NOTE = "Note: my trail data doesn't include locations, so I can't filter by where you are."
+SEARCH_UNAVAILABLE = "I can't reach the trail search right now, so I can't recommend a trail. Please try again in a moment."
+NO_RESULTS = "I couldn't find a trail that matches that. Could you describe what you're after a little differently?"
+
+
+def facts_line(hit: TrailHit) -> str:
+    f = hit.facts
+    return f"{f.difficulty}, {f.distance_km:g} km, {f.elevation_gain_m} m climb"
+
+
+def detail_line(hit: TrailHit) -> str:
+    return f"{hit.name}: {facts_line(hit)}. Best for: {', '.join(hit.facts.best_for)}. Dogs: {hit.facts.dogs_allowed}."
+
+
+def tied_hits(hits: list[TrailHit], margin: float) -> list[TrailHit]:
+    """The top results whose score is within `margin` of the best one. Empty unless at least two tie."""
+    if len(hits) < 2:
+        return []
+    top = hits[0].score
+    tied = [h for h in hits if round(top - h.score, 4) < margin]
+    return tied if len(tied) >= 2 else []
+
+
+def disambiguation_reply(tied: list[TrailHit]) -> str:
+    """Don't pretend to know which of nearly-equal trails is best: show both and ask."""
+    if len(tied) == 2:
+        a, b = tied
+        diffs = []
+        if a.facts.difficulty != b.facts.difficulty:
+            diffs.append(f"{a.name} is {a.facts.difficulty} and {b.name} is {b.facts.difficulty}")
+        if a.facts.distance_km != b.facts.distance_km:
+            longer, shorter = (a, b) if a.facts.distance_km > b.facts.distance_km else (b, a)
+            diffs.append(
+                f"{longer.name} is longer ({longer.facts.distance_km:g} km against {shorter.facts.distance_km:g} km)"
+            )
+        if a.facts.elevation_gain_m != b.facts.elevation_gain_m:
+            steeper, flatter = (
+                (a, b) if a.facts.elevation_gain_m > b.facts.elevation_gain_m else (b, a)
+            )
+            diffs.append(
+                f"{steeper.name} has more climbing ({steeper.facts.elevation_gain_m} m against {flatter.facts.elevation_gain_m} m)"
+            )
+        header = "Two trails fit your request almost equally well, so I won't pick one for you:"
+        differences = (
+            ("Main differences: " + "; ".join(diffs) + ".")
+            if diffs
+            else "They look alike on the facts I have."
+        )
+    else:
+        header = "Several trails fit your request about equally well:"
+        differences = "They differ in difficulty, length and climb, as listed above."
+    lines = "\n".join(f"- {detail_line(h)}" for h in tied)
+    return f"{header}\n{lines}\n{differences} Tell me which sounds closer to what you want and I'll narrow it down."
+
+
+def summary_reply(hits: list[TrailHit]) -> str:
+    """Deterministic recommendation, used when the model cannot (or must not) write the explanation."""
+    best = hits[0]
+    text = f"Best match: {detail_line(best)}"
+    if len(hits) > 1:
+        text += (
+            " Also worth a look: "
+            + "; ".join(f"{h.name} ({facts_line(h)})" for h in hits[1:3])
+            + "."
+        )
+    return text

@@ -11,7 +11,8 @@ frontend → observability. **Python only** (FastAPI, LangGraph, pgvector, LiteL
 | 1 | Workflow: LangGraph, rule routing, guardrails, SSE, LiteLLM tiers | ✅ done. Verified with a real model (`fast` and `smart` tiers) |
 | 2A | Embedder, pgvector, ingestion, vector search, query validation | ✅ done. Real model, 10/12 on the test queries (baseline) |
 | 2B | Hybrid search (keyword + RRF), chunking experiments, evaluation harness | **deferred until after Phase 3.** Baseline: 10/12; targets are query #3 (hard scramble + waterfall) and #9 (Extension must outrank Loop) |
-| 3 | Agent, tools, memory, explainable recommendations | **next.** Step 1: `scripts/tool_call_check.py` (can the local models call a tool correctly?) |
+| 3A | Agent mode: search tool, rule-first routing, clarifying question, tie comparison, grounded answers | built, 126 tests pass in the agent service; **needs your first run with the real model** |
+| 3B | Memory, saved preferences, compare/details tools, explanations with sources, feedback | next |
 | 4 | React frontend and dashboard | |
 | 5 | Langfuse, structlog, metrics | |
 
@@ -153,6 +154,57 @@ one-chunk-per-trail rule needs the exact scan. At a much larger scale you would 
 
 Tests: `uv run pytest -q` inside `services\embedder` (no database needed) and `services\search` (needs the `db` container;
 they use a separate `trailmate_search_test` database and skip with a message if Postgres isn't running).
+
+## Stage 3A: the agent (Phase 3)
+
+A second graph beside the Phase 1 workflow. Same message, two modes, so you can compare them:
+`--mode workflow` (default, Phase 1: generic text, no trail data) and `--mode agent` (Phase 3).
+
+```
+message -> input_guard -> triage ──chat────► templated reply        (greetings, thanks, "what can you do")
+                             ├─reject──► refusal                    (live weather, off-topic)
+                             ├─vague───► ONE clarifying question    (nothing to search for yet)
+                             └─agent──► decide (MODEL: search or answer)
+                                          └─► run_search (the tool) ─► tied? ─► compare both (code)
+                                                                      └─ else ─► write_answer (MODEL, streamed)
+                                          every reply ─► output_guard (incl. "no invented numbers")
+```
+
+**Who decides what.** Code decides the obvious cases, whether a request is too vague, whether the top two results
+are tied (score gap under `tie_margin`, default 0.01), the facts shown to the user, and whether a reply invented
+numbers. The model decides whether to call `search_trails` (and with what query) and writes the wording. This split
+comes from `scripts/tool_call_check.py`: the local models called the tool correctly but over-called it on greetings
+and never asked clarifying questions.
+
+**Grounding.** Trail facts come from the database (`results` event). Any distance or climb in the model's reply that
+is not in those facts (or typed by the user) is replaced by a reply built from the facts.
+
+**Run it** (many terminals; Stage 3A needs everything):
+
+```powershell
+docker compose up -d db
+# 1. embedder   (services\embedder)  uv run uvicorn trailmate_embedder.main:app --port 8001
+# 2. search     (services\search)    uv run uvicorn trailmate_search.main:app --port 8002
+# 3. LiteLLM    (Trailmate)          python scripts/start_litellm.py
+# 4. agent      (services\agent)     uv sync   then   uv run uvicorn trailmate_agent.main:app
+# 5. talk to it (Trailmate)          python scripts/chat.py "I want an easy waterfall hike" --mode agent --verbose
+```
+
+Things to try, and what to expect:
+
+| Message | Expect |
+|---|---|
+| `Hello!` | templated greeting, no model call |
+| `Suggest a good trek` | one clarifying question, no search |
+| `I want an easy waterfall hike` | a search, then a recommendation using real trail names and numbers |
+| `quiet version of the popular waterfall hike` | the two Cascade trails are nearly tied, so it compares them instead of picking one |
+| `Any easy waterfall hikes near Mumbai?` | a note that the data has no locations, then results |
+| `somewhere to clear my head` | the model decides (Phase 1 routing missed this) |
+| `a waterfall hike but not too crowded` / `hard scramble with a waterfall` | known weak spots from the Phase 2 baseline: expect an easy trail ranked high |
+
+The first request after idle is slow (the model loads). Each agent turn makes up to two model calls, so expect it to
+be slower than Phase 1 on a CPU: measure it, don't trust my estimate. Add `--model smart` to try the other tier,
+and set `TRAILMATE_EXPLAIN_WITH_LLM=false` to build the recommendation from a template (faster).
 
 ## Dataset (`data/`)
 
