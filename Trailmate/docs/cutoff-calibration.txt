@@ -1,0 +1,31 @@
+﻿Real questions (a good answer exists)
+  0.399  Something short and dog-friendly, totally flat
+  0.486  Looking for a hard scramble with a waterfall
+  0.504  Steep climb with a big payoff view, I don't mind exposure
+  0.531  Alpine trail where I might see snow
+  0.535  quiet version of the popular waterfall hike
+  0.547  Family hike with wildflowers, nothing too long
+  0.564  A waterfall hike but not too crowded
+  0.580  Coastal hike with some exposure
+  0.598  flat easy dog-friendly walk with some history or old ruins
+  0.607  I want an easy trail near water for tomorrow morning
+  0.649  Best sunset viewpoint hike
+  0.655  Quiet forest trail with a creek crossing
+
+Out-of-scope questions (no good answer)
+  0.151  what camping stove should I buy
+  0.181  somewhere to clear my head
+  0.209  a quiet cafe to read a book
+  0.303  where can I buy hiking boots
+  0.315  scuba diving spots
+  0.344  ski resort with chairlifts
+  0.397  best restaurant near the trailhead
+  0.453  history of the Appalachian Trail
+
+Lowest real-question score : 0.399
+Highest out-of-scope score : 0.453
+The groups OVERLAP: some out-of-scope questions score as high as real ones.
+No single cutoff separates them cleanly. Choose one that favours refusing weak matches,
+and expect some real questions to be asked to rephrase.
+
+Sample size: 12 real and 8 out-of-scope questions. Treat the result as a first estimate.

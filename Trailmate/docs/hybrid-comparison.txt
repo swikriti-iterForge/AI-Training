@@ -1,0 +1,25 @@
+﻿#   query                                                         vector   keyword    hybrid
+1   I want an easy trail near water for tomorrow morning         PASS r1   PASS r1   PASS r1
+2   Something short and dog-friendly, totally flat               PASS r2   PASS r1   PASS r1
+3   Looking for a hard scramble with a waterfall                 FAIL r3   PASS r1   PASS r2
+4   Best sunset viewpoint hike                                   PASS r1   PASS r1   PASS r1
+5   Family hike with wildflowers, nothing too long               PASS r1   PASS r2   PASS r1
+6   Alpine trail where I might see snow                          PASS r2   PASS r1   PASS r2
+7   Coastal hike with some exposure                              PASS r1   PASS r1   PASS r1
+8   Quiet forest trail with a creek crossing                     PASS r1   PASS r1   PASS r1
+9   A waterfall hike but not too crowded                         FAIL r2   FAIL r3   FAIL r3
+10  Steep climb with a big payoff view, I don't mind exposur     PASS r1   PASS r2   PASS r1
+11  quiet version of the popular waterfall hike                  PASS r1   FAIL r-   FAIL r3
+12  flat easy dog-friendly walk with some history or old rui     PASS r1   PASS r1   PASS r1
+
+------------------------------------------------------------------------------------
+                                                                  vector   keyword    hybrid
+Passed                                                             10/12     10/12     10/12
+Near-duplicate pairs                                                 2/3       1/3       1/3
+Expected trail at rank 1                                            8/12      8/12      8/12
+  within top 2                                                     11/12     10/12     10/12
+  within top 3                                                     12/12     11/12     12/12
+Mean latency (ms)                                                     71        46        57
+
+r = rank of the first expected trail ('-' = not in the top 5). 12 queries is a small sample:
+a one-query difference is noise. Switch the service default only if a mode is clearly better.
