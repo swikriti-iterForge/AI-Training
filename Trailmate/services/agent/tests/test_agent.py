@@ -6,6 +6,16 @@ choose is measured on your machine by scripts/tool_call_check.py.
 """
 
 import pytest
+from agent_fakes import (
+    CLEAR,
+    GOOD_ANSWER,
+    TIED,
+    FakeSearch,
+    ScriptedLLM,
+    agent,
+    event,
+    hit,
+)
 from httpx import ASGITransport, AsyncClient
 from test_graph_api import done, names, parse_sse, streamed_text
 
@@ -15,90 +25,6 @@ from trailmate_agent.grounding import unsupported_numbers
 from trailmate_agent.llm import Completion, ToolCall
 from trailmate_agent.main import create_app
 from trailmate_agent.routing import is_vague, mentions_location, triage
-from trailmate_agent.tools import Facts, SearchResults, SearchUnavailable, TrailHit
-
-
-def hit(slug, name, score, difficulty, km, climb, best_for=("hiking",), dogs="Yes, on leash"):
-    return TrailHit(
-        slug=slug,
-        name=name,
-        score=score,
-        matched_section="Overview",
-        excerpt=f"{name} is a trail.",
-        facts=Facts(
-            difficulty=difficulty,
-            distance_km=km,
-            elevation_gain_m=climb,
-            best_for=list(best_for),
-            dogs_allowed=dogs,
-        ),
-    )
-
-
-EXTENSION = hit(
-    "cascade-falls-extension", "Cascade Falls Extension", 0.60, "Easy-Moderate", 5.5, 180
-)
-LOOP = hit("cascade-falls-loop", "Cascade Falls Loop", 0.50, "Easy", 3.2, 90)
-GORGE = hit("thunder-gorge-trail", "Thunder Gorge Trail", 0.40, "Hard", 12.5, 890)
-CLEAR = [EXTENSION, LOOP, GORGE]  # a clear winner
-TIED = [
-    hit("cascade-falls-extension", "Cascade Falls Extension", 0.535, "Easy-Moderate", 5.5, 180),
-    hit("cascade-falls-loop", "Cascade Falls Loop", 0.534, "Easy", 3.2, 90),
-    GORGE,
-]
-
-GOOD_ANSWER = (
-    "Cascade Falls Extension suits you: it is Easy-Moderate at 5.5 km with a 180 m climb. ",
-    "The Loop is a shorter option at 3.2 km.",
-)
-
-
-class ScriptedLLM:
-    """Stands in for the model. `decide` is what complete() returns; `write` is what stream() yields."""
-
-    def __init__(self, decide=None, write=GOOD_ANSWER):
-        self.decide = (
-            decide
-            if decide is not None
-            else Completion("", [ToolCall("search_trails", '{"query": "easy waterfall hike"}')])
-        )
-        self.write = write
-        self.complete_calls, self.stream_calls = [], []
-
-    async def complete(self, messages, tier, tools):
-        self.complete_calls.append((messages, tier, tools))
-        if isinstance(self.decide, Exception):
-            raise self.decide
-        return self.decide
-
-    async def stream(self, messages, tier):
-        self.stream_calls.append((messages, tier))
-        if isinstance(self.write, Exception):
-            raise self.write
-        for piece in self.write:
-            yield piece
-
-
-class FakeSearch:
-    def __init__(self, hits=CLEAR, fail=False):
-        self.hits, self.fail, self.queries = hits, fail, []
-
-    async def search(self, query, top_k=3):
-        self.queries.append((query, top_k))
-        if self.fail:
-            raise SearchUnavailable("connection refused")
-        return SearchResults(query=query, results=self.hits)
-
-
-async def agent(llm, search, message, **extra):
-    app = create_app(llm=llm, settings=Settings(), search=search)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post("/chat", json={"message": message, "mode": "agent", **extra})
-    return response, parse_sse(response.text) if response.status_code == 200 else []
-
-
-def event(events, kind):
-    return [data for e, data in events if e == kind]
 
 
 # ---------- rules still handle the obvious cases: the model is never asked ----------
@@ -253,13 +179,11 @@ async def test_invented_distance_is_replaced_with_a_reply_built_from_the_facts()
     llm = ScriptedLLM(write=("Cascade Falls Extension is great, about 7 km long.",))
     _, events = await agent(llm, FakeSearch(), "I want an easy waterfall hike")
     text = streamed_text(events)
-    assert (
-        "7 km" not in text
-        and "Best match: Cascade Falls Extension: Easy-Moderate, 5.5 km, 180 m climb" in text
-    )
+    assert "7 km" not in text
+    assert "Best match: Cascade Falls Extension (Easy-Moderate, 5.5 km, 180 m climb)." in text
     assert "replace" in names(events)
     d = done(events)
-    assert d["error"] == "grounding:7" and d["reply_source"] == "template"
+    assert d["error"] == "grounding:number:7" and d["reply_source"] == "template"
 
 
 async def test_numbers_the_user_typed_are_allowed_in_the_reply():
@@ -285,7 +209,7 @@ def test_unsupported_numbers(reply, allowed, bad):
 async def test_direct_answer_with_a_made_up_distance_is_replaced():
     llm = ScriptedLLM(decide=Completion("Try the 4 km lakeside loop.", []))
     _, events = await agent(llm, FakeSearch(), "somewhere to clear my head")
-    assert "4 km" not in streamed_text(events) and done(events)["error"] == "grounding:4"
+    assert "4 km" not in streamed_text(events) and done(events)["error"] == "grounding:number:4"
 
 
 # ---------- honesty about the data ----------

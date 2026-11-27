@@ -6,6 +6,10 @@ from pathlib import Path
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+DEFAULT_PREFERENCE_FILE = (
+    Path(__file__).resolve().parents[4] / "data" / "memory" / "preferences.json"
+)
+
 # Trailmate/.env: shared with scripts/start_litellm.py, so the proxy and the agent use ONE key.
 ROOT_ENV = Path(__file__).resolve().parents[4] / ".env"
 
@@ -36,8 +40,17 @@ class Settings(BaseSettings):
     # Two results closer than this in score count as a tie, and the agent compares them instead of picking.
     # 0.01 is a starting guess from 12 test queries, not a tuned value.
     tie_margin: float = 0.01
-    # False = write the recommendation from a template instead of asking the model (faster, less natural)
-    explain_with_llm: bool = True
+    # How the search ranks: vector | keyword | hybrid. Change to hybrid only after
+    # `python eval/check_queries.py --compare` shows it is clearly better on the real model.
+    search_mode: str = "vector"
+    # Below this best-match similarity the agent does not recommend anything and asks for more detail.
+    # PROVISIONAL: calibrate with `python eval/check_cutoff.py`, then set TRAILMATE_MIN_RELEVANCE.
+    min_relevance: float = 0.25
+    # The recommendation text is built by code from the retrieved facts: instant, and it cannot invent
+    # anything. True = let the model write it instead (opt-in; slower, and it made false claims in testing).
+    explain_with_llm: bool = False
+    # Long-term memory: what users asked us to remember (a plain JSON file; git-ignored)
+    preference_file: Path = DEFAULT_PREFERENCE_FILE
     # Optional JSON file overriding guardrail rules (see guardrails.GuardrailConfig)
     guardrail_config_path: str | None = None
 

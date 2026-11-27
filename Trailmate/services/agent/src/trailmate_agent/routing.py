@@ -140,8 +140,13 @@ def is_vague(message: str) -> bool:
     return not [w for w in re.findall(r"[a-z][a-z-]*", message.lower()) if w not in FILLER_WORDS]
 
 
+# "near Mumbai", "around Pune", "in Lonavala". Case-sensitive on the place name on purpose, so
+# "in the mountains" is not a place.
+LOCATION_RE = re.compile(
+    r"\b(?:[Nn]ear|[Aa]round|[Ii]n|[Cc]lose to|[Oo]utside)\s+(?:the\s+)?[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*"
+)
+
+
 def mentions_location(message: str) -> bool:
-    """Crude: 'near Mumbai', 'around Pune', 'in Lonavala'. Our data has no locations, so we say so."""
-    return bool(
-        re.search(r"\b(?:near|around|in|close to|outside)\s+(?:the\s+)?[A-Z][a-zA-Z]+", message)
-    )
+    """Crude on purpose. Our data has no locations, so when the user names a place we say so."""
+    return bool(LOCATION_RE.search(message))

@@ -13,7 +13,6 @@
 """
 
 import functools
-import operator
 import time
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, TypedDict
@@ -35,8 +34,14 @@ LLM_UNAVAILABLE = (
 )
 
 
-def merge_dicts(a: dict, b: dict) -> dict:
-    return {**a, **b}
+def merge_dicts(a: dict, b: dict | None) -> dict:
+    """Merge a node's update into the state. None means "start fresh" (used at the start of each turn)."""
+    return {} if b is None else {**a, **b}
+
+
+def add_lists(a: list, b: list | None) -> list:
+    """Append a node's update to the state. None means "start fresh" (used at the start of each turn)."""
+    return [] if b is None else a + b
 
 
 class State(TypedDict, total=False):
@@ -49,7 +54,7 @@ class State(TypedDict, total=False):
     reply_source: str  # template | llm | fallback
     error: str
     timings: Annotated[dict[str, float], merge_dicts]  # milliseconds per node
-    trace: Annotated[list[str], operator.add]  # nodes visited, in order
+    trace: Annotated[list[str], add_lists]  # nodes visited, in order
 
 
 def system_prompt(cfg: GuardrailConfig) -> str:

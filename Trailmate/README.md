@@ -10,9 +10,9 @@ frontend → observability. **Python only** (FastAPI, LangGraph, pgvector, LiteL
 | 0.5 | Environment smoke test | ✅ `scripts/smoke_test.py` |
 | 1 | Workflow: LangGraph, rule routing, guardrails, SSE, LiteLLM tiers | ✅ done. Verified with a real model (`fast` and `smart` tiers) |
 | 2A | Embedder, pgvector, ingestion, vector search, query validation | ✅ done. Real model, 10/12 on the test queries (baseline) |
-| 2B | Hybrid search (keyword + RRF), chunking experiments, evaluation harness | **deferred until after Phase 3.** Baseline: 10/12; targets are query #3 (hard scramble + waterfall) and #9 (Extension must outrank Loop) |
-| 3A | Agent mode: search tool, rule-first routing, clarifying question, tie comparison, grounded answers | built, 126 tests pass in the agent service; **needs your first run with the real model** |
-| 3B | Memory, saved preferences, compare/details tools, explanations with sources, feedback | next |
+| 2B | Hybrid search (keyword + vector, RRF) | built; **not yet measured on the real model**: run `python eval/check_queries.py --compare`. Reranker, chunking comparison and Precision/MRR report: dropped (no problem seen) |
+| 3A | Agent mode: search tool, rules-first routing, clarifying question, tie comparison, code-built explanations, difficulty filter, relevance cutoff | built, 199 agent tests; fixes from the first real-model test applied. **Needs your re-test** |
+| 3B | Memory: short-term (the conversation) and long-term (saved preferences); "show me more", "the second one" | built, same service. **Needs your test** |
 | 4 | React frontend and dashboard | |
 | 5 | Langfuse, structlog, metrics | |
 
@@ -155,56 +155,71 @@ one-chunk-per-trail rule needs the exact scan. At a much larger scale you would 
 Tests: `uv run pytest -q` inside `services\embedder` (no database needed) and `services\search` (needs the `db` container;
 they use a separate `trailmate_search_test` database and skip with a message if Postgres isn't running).
 
-## Stage 3A: the agent (Phase 3)
+## Stage 3: the agent, with memory (Phase 3)
 
 A second graph beside the Phase 1 workflow. Same message, two modes, so you can compare them:
 `--mode workflow` (default, Phase 1: generic text, no trail data) and `--mode agent` (Phase 3).
 
 ```
-message -> input_guard -> triage ──chat────► templated reply        (greetings, thanks, "what can you do")
-                             ├─reject──► refusal                    (live weather, off-topic)
-                             ├─vague───► ONE clarifying question    (nothing to search for yet)
-                             └─agent──► decide (MODEL: search or answer)
-                                          └─► run_search (the tool) ─► tied? ─► compare both (code)
-                                                                      └─ else ─► write_answer (MODEL, streamed)
-                                          every reply ─► output_guard (incl. "no invented numbers")
+message -> input_guard -> triage --chat / reject--------> templated reply
+                            |-- remember / forget / "what do you remember" / start over --> memory_cmd
+                            |-- "the second one" --> show_details     |-- "show me more" --> prepare_more --+
+                            |-- too vague (and nothing remembered) --> ONE clarifying question              |
+                            '-- otherwise --> decide (MODEL: what to search for) --> run_search <-----------+
+                                    run_search: filters by difficulty, drops place names, refuses weak matches
+                                    tied? -> compare both (code)    else -> explanation built by code from the facts
+                            every reply -> output_guard -> END   (also saves what was shown, for "more")
 ```
 
-**Who decides what.** Code decides the obvious cases, whether a request is too vague, whether the top two results
-are tied (score gap under `tie_margin`, default 0.01), the facts shown to the user, and whether a reply invented
-numbers. The model decides whether to call `search_trails` (and with what query) and writes the wording. This split
-comes from `scripts/tool_call_check.py`: the local models called the tool correctly but over-called it on greetings
-and never asked clarifying questions.
+**Who decides what.** Code: the obvious cases, whether a request is too vague, difficulty and features read from
+your words, whether results are tied, whether a match is too weak, the facts, and the explanation. The model:
+what to search for. The model-written recommendation still exists (`TRAILMATE_EXPLAIN_WITH_LLM=true`) but is off.
 
-**Grounding.** Trail facts come from the database (`results` event). Any distance or climb in the model's reply that
-is not in those facts (or typed by the user) is replaced by a reply built from the facts.
+**What the first real-model test changed.**
 
-**Run it** (many terminals; Stage 3A needs everything):
+| Seen in the test | Fix |
+|---|---|
+| The model said a trail was "near Mumbai" (the data has no locations) | The explanation is built by code, so it can't echo it. Place names are also removed from the search (they lowered the top score from 0.640 to 0.529) |
+| The model credited Blackrock Summit with a waterfall it doesn't have | "Why it fits / Not matched" is computed from what each trail's text really contains (`terms_found` from the search service) |
+| A Hard trail ranked 2nd for "easy"; an easy one ranked 1st for "hard scramble" | Difficulty is read from the request and applied as a filter. If no trail has that rating, the filter is dropped and you are told |
+| "Somewhere to clear my head" scored 0.14 and still got a confident answer | A relevance cutoff (`TRAILMATE_MIN_RELEVANCE`, default 0.25, **provisional**): weak matches get a question instead of a recommendation |
+| Writing the answer took 26-35 s | No second model call: one call to decide, then code |
+
+**Search modes** (`TRAILMATE_SEARCH_MODE`, default `vector`): `vector` (meaning), `keyword` (PostgreSQL full-text,
+with stemming), `hybrid` (both, fused with Reciprocal Rank Fusion). `score` is always the cosine similarity, so
+the cutoff and tie checks mean the same thing in every mode. Don't switch the default until
+`python eval/check_queries.py --compare` shows hybrid is clearly better on the real model.
+
+**Memory.**
+
+| | Short-term | Long-term |
+|---|---|---|
+| What | the conversation: difficulty and features so far, which trails were shown | only what you ask it to keep |
+| Where | LangGraph checkpointer, one thread per `session_id` (RAM: lost on restart) | `data/memory/preferences.json`, one entry per `user_id` |
+| Use | "show me more" (skips what was shown), "the second one", "something harder" (keeps your waterfall) | applied automatically in new chats, and the reply says so |
+| Control | `start over` | `remember that I prefer easy trails`, `what do you remember about me`, `forget my preferences`, `GET/DELETE /memory/{user_id}` |
+
+A new topic replaces the old features, a refinement keeps them. Difficulty carries over until you change it.
+Not authenticated: anyone who knows a user id can read that user's preferences. Fine locally, not for production.
+
+**Run it** (many terminals; Stage 3 needs everything):
 
 ```powershell
 docker compose up -d db
 # 1. embedder   (services\embedder)  uv run uvicorn trailmate_embedder.main:app --port 8001
-# 2. search     (services\search)    uv run uvicorn trailmate_search.main:app --port 8002
+# 2. search     (services\search)    uv run alembic upgrade head   (once; adds the keyword column)
+#                                    uv run uvicorn trailmate_search.main:app --port 8002
 # 3. LiteLLM    (Trailmate)          python scripts/start_litellm.py
-# 4. agent      (services\agent)     uv sync   then   uv run uvicorn trailmate_agent.main:app
-# 5. talk to it (Trailmate)          python scripts/chat.py "I want an easy waterfall hike" --mode agent --verbose
+# 4. agent      (services\agent)     uv run uvicorn trailmate_agent.main:app
+# 5. talk       (Trailmate)          python scripts/chat.py -i --verbose        # a conversation, with memory
 ```
 
-Things to try, and what to expect:
+**Measure instead of guessing** (embedder and search running):
 
-| Message | Expect |
-|---|---|
-| `Hello!` | templated greeting, no model call |
-| `Suggest a good trek` | one clarifying question, no search |
-| `I want an easy waterfall hike` | a search, then a recommendation using real trail names and numbers |
-| `quiet version of the popular waterfall hike` | the two Cascade trails are nearly tied, so it compares them instead of picking one |
-| `Any easy waterfall hikes near Mumbai?` | a note that the data has no locations, then results |
-| `somewhere to clear my head` | the model decides (Phase 1 routing missed this) |
-| `a waterfall hike but not too crowded` / `hard scramble with a waterfall` | known weak spots from the Phase 2 baseline: expect an easy trail ranked high |
-
-The first request after idle is slow (the model loads). Each agent turn makes up to two model calls, so expect it to
-be slower than Phase 1 on a CPU: measure it, don't trust my estimate. Add `--model smart` to try the other tier,
-and set `TRAILMATE_EXPLAIN_WITH_LLM=false` to build the recommendation from a template (faster).
+```powershell
+python eval/check_queries.py --compare     # vector vs keyword vs hybrid on the 12 test queries
+python eval/check_cutoff.py                # where should the "no good match" cutoff sit?
+```
 
 ## Dataset (`data/`)
 

@@ -4,7 +4,7 @@ The model never touches the database. It can only ASK for `search_trails(query)`
 the arguments, calls the search service over HTTP with a timeout, and passes the result on.
 """
 
-from typing import Protocol
+from typing import Any, Protocol
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError
@@ -52,6 +52,10 @@ class TrailHit(BaseModel):
     matched_section: str
     excerpt: str
     facts: Facts
+    vector_rank: int | None = None
+    keyword_rank: int | None = None
+    fused_score: float | None = None
+    terms_found: list[str] = []  # which of the requested terms this trail's text really mentions
 
 
 class SearchResults(BaseModel):
@@ -59,12 +63,30 @@ class SearchResults(BaseModel):
     results: list[TrailHit]
 
 
+class TrailInfo(BaseModel):
+    slug: str
+    name: str
+    tagline: str | None
+    facts: Facts
+
+
 class SearchUnavailable(Exception):
     """The search service is down, too slow, or returned something we cannot read."""
 
 
 class TrailSearch(Protocol):
-    async def search(self, query: str, top_k: int = 3) -> SearchResults: ...
+    async def search(
+        self,
+        query: str,
+        top_k: int = 3,
+        *,
+        mode: str | None = None,
+        difficulty: list[str] | None = None,
+        exclude: list[str] | None = None,
+        terms: list[str] | None = None,
+    ) -> SearchResults: ...
+
+    async def get_trail(self, slug: str) -> TrailInfo: ...
 
 
 class HttpTrailSearch:
@@ -73,11 +95,37 @@ class HttpTrailSearch:
     def __init__(self, base_url: str, timeout_s: float = 20.0) -> None:
         self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout_s)
 
-    async def search(self, query: str, top_k: int = 3) -> SearchResults:
+    async def search(
+        self,
+        query: str,
+        top_k: int = 3,
+        *,
+        mode: str | None = None,
+        difficulty: list[str] | None = None,
+        exclude: list[str] | None = None,
+        terms: list[str] | None = None,
+    ) -> SearchResults:
+        payload: dict[str, Any] = {"query": query, "top_k": top_k}
+        for key, value in (
+            ("mode", mode),
+            ("difficulty", difficulty),
+            ("exclude", exclude),
+            ("terms", terms),
+        ):
+            if value:  # only send what is set, so an older search service still understands us
+                payload[key] = value
         try:
-            response = await self._client.post("/search", json={"query": query, "top_k": top_k})
+            response = await self._client.post("/search", json=payload)
             response.raise_for_status()
             return SearchResults.model_validate(response.json())
+        except (httpx.HTTPError, ValidationError, ValueError) as exc:
+            raise SearchUnavailable(f"{type(exc).__name__}: {exc}"[:200]) from exc
+
+    async def get_trail(self, slug: str) -> TrailInfo:
+        try:
+            response = await self._client.get(f"/trails/{slug}")
+            response.raise_for_status()
+            return TrailInfo.model_validate(response.json())
         except (httpx.HTTPError, ValidationError, ValueError) as exc:
             raise SearchUnavailable(f"{type(exc).__name__}: {exc}"[:200]) from exc
 
