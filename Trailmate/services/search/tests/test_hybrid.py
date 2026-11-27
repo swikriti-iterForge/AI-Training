@@ -151,3 +151,42 @@ async def test_terms_are_limited_and_sanitised(client):
     assert (
         await client.post("/search", json={"query": "x", "terms": ["a"] * 9})
     ).status_code == 422
+
+
+# ---------- distance limits ----------
+@pytest.mark.parametrize("mode", ["vector", "keyword", "hybrid"])
+async def test_distance_limits_apply_in_every_mode(client, mode):
+    short = await search(client, "easy trail walk hike", mode=mode, max_distance_km=4.0, top_k=10)
+    assert short["results"] and all(r["facts"]["distance_km"] <= 4.0 for r in short["results"])
+    long = await search(
+        client, "hard trail hike scramble", mode=mode, min_distance_km=8.0, top_k=10
+    )
+    assert long["results"] and all(r["facts"]["distance_km"] >= 8.0 for r in long["results"])
+
+
+async def test_distance_limits_form_a_range_and_combine_with_difficulty(client):
+    middle = await search(
+        client, "trail hike walk", min_distance_km=5.0, max_distance_km=6.0, top_k=10
+    )
+    assert middle["results"] and all(
+        5.0 <= r["facts"]["distance_km"] <= 6.0 for r in middle["results"]
+    )
+    assert (await search(client, "trail hike", difficulty=["Hard"], max_distance_km=4.0))[
+        "results"
+    ] == []  # no short Hard trail
+    assert (
+        len(
+            (
+                await search(
+                    client, "trail hike", difficulty=["Hard"], min_distance_km=8.0, top_k=10
+                )
+            )["results"]
+        )
+        == 5
+    )
+
+
+async def test_a_negative_distance_is_rejected(client):
+    assert (
+        await client.post("/search", json={"query": "x", "max_distance_km": -1})
+    ).status_code == 422

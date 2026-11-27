@@ -58,6 +58,12 @@ class SearchRequest(BaseModel):
     difficulty: list[str] | None = Field(
         default=None, max_length=4, description="only trails with one of these ratings"
     )
+    min_distance_km: float | None = Field(
+        default=None, ge=0, description="only trails at least this long"
+    )
+    max_distance_km: float | None = Field(
+        default=None, ge=0, description="only trails at most this long"
+    )
     exclude: list[str] = Field(
         default_factory=list, max_length=50, description="trail slugs to leave out"
     )
@@ -162,7 +168,12 @@ def create_app(embedder: Embedder | None = None, settings: Settings | None = Non
         [query_vector] = await embedder.embed([body.query])
         embedded = time.perf_counter()
 
-        scope = (body.strategy, body.difficulty, body.exclude)
+        scope = (
+            body.strategy,
+            body.difficulty,
+            body.exclude,
+            (body.min_distance_km, body.max_distance_km),
+        )
         by_meaning = await vector_candidates(session, query_vector, *scope)
         by_words = (
             await keyword_candidates(session, keyword_tokens(body.query), *scope)

@@ -48,12 +48,23 @@ def rrf(rankings: list[list[int]], k: int = RRF_K) -> dict[int, float]:
     return scores
 
 
-def _scope(stmt: Select, strategy: str, difficulty: list[str] | None, exclude: list[str]) -> Select:
+def _scope(
+    stmt: Select,
+    strategy: str,
+    difficulty: list[str] | None,
+    exclude: list[str],
+    km_range: tuple[float | None, float | None] = (None, None),
+) -> Select:
     stmt = stmt.join(Trail, Trail.id == Chunk.trail_id).where(Chunk.strategy == strategy)
     if difficulty:
         stmt = stmt.where(Trail.difficulty.in_(difficulty))
     if exclude:
         stmt = stmt.where(Trail.slug.not_in(exclude))
+    low, high = km_range  # km; either end may be open
+    if low is not None:
+        stmt = stmt.where(Trail.distance_km >= low)
+    if high is not None:
+        stmt = stmt.where(Trail.distance_km <= high)
     return stmt
 
 
@@ -63,6 +74,7 @@ async def vector_candidates(
     strategy: str,
     difficulty: list[str] | None,
     exclude: list[str],
+    km_range: tuple[float | None, float | None] = (None, None),
 ) -> list[Candidate]:
     distance = Chunk.embedding.cosine_distance(query_vector)
     base = _scope(
@@ -70,6 +82,7 @@ async def vector_candidates(
         strategy,
         difficulty,
         exclude,
+        km_range,
     )
     inner = base.ext(distinct_on(Chunk.trail_id)).order_by(Chunk.trail_id, distance).subquery()
     rows = (
@@ -84,6 +97,7 @@ async def keyword_candidates(
     strategy: str,
     difficulty: list[str] | None,
     exclude: list[str],
+    km_range: tuple[float | None, float | None] = (None, None),
 ) -> list[Candidate]:
     if not tokens:
         return []
@@ -95,6 +109,7 @@ async def keyword_candidates(
         strategy,
         difficulty,
         exclude,
+        km_range,
     )
     base = base.where(Chunk.tsv.op("@@")(query))
     inner = base.ext(distinct_on(Chunk.trail_id)).order_by(Chunk.trail_id, rank.desc()).subquery()
