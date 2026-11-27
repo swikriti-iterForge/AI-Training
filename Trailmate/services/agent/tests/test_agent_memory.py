@@ -534,6 +534,7 @@ async def test_memory_endpoints_show_and_erase():
             "terms": ["lake"],
             "dogs": False,
             "quiet": False,
+            "length": None,
         }
         assert (await client.delete("/memory/alice")).json() == {"deleted": True}
         assert (await client.delete("/memory/alice")).json() == {"deleted": False}

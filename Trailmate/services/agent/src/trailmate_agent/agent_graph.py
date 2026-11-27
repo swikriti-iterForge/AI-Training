@@ -30,6 +30,7 @@ from trailmate_agent.answers import (
     CLARIFY_QUESTION,
     DROPPED_NOTE,
     FORGET_REPLY,
+    LENGTH_NOTE,
     LOCATION_NOTE,
     NEED_USER,
     NO_MATCH,
@@ -66,9 +67,11 @@ from trailmate_agent.prefs import (
     is_filter_only,
     merge_prefs,
     minus,
+    only_preference_words,
     place_names,
     states_preference,
     strip_location,
+    without,
 )
 from trailmate_agent.routing import is_vague, mentions_location, triage
 from trailmate_agent.store import PreferenceStore
@@ -97,6 +100,10 @@ class AgentState(State, total=False):
     memory_note: str  # tells the user which remembered preferences were used
     memory_used: dict[str, Any]  # the remembered wishes behind memory_note (so it can be rebuilt)
     relaxed: bool  # True if no trail matched the difficulty, so it was dropped
+    relaxed_length: bool  # True if no trail matched the length, so it was dropped
+    difficulty_dropped: (
+        bool  # a difficulty carried over from earlier was given up (it matched nothing)
+    )
     terms_dropped: list[
         str
     ]  # remembered features left out because they made the search match nothing
@@ -105,7 +112,7 @@ class AgentState(State, total=False):
 
 
 def default_memory() -> dict[str, Any]:
-    return {"prefs": {}, "last_shown": [], "seen": [], "last_query": ""}
+    return {"prefs": {}, "last_shown": [], "seen": [], "last_query": "", "dismissed": []}
 
 
 def fresh_turn(message: str, tier: str, user_id: str | None) -> dict[str, Any]:
@@ -133,6 +140,8 @@ def fresh_turn(message: str, tier: str, user_id: str | None) -> dict[str, Any]:
         "memory_note": "",
         "memory_used": {},
         "relaxed": False,
+        "relaxed_length": False,
+        "difficulty_dropped": False,
         "terms_dropped": [],
         "trace": None,
         "timings": None,
@@ -199,12 +208,23 @@ def _memory(state: AgentState) -> dict[str, Any]:
     return {**default_memory(), **(state.get("memory") or {})}
 
 
-def memory_note_text(saved: Prefs, earlier: Prefs, dropped: frozenset[str] = frozenset()) -> str:
+def memory_note_text(
+    saved: Prefs,
+    earlier: Prefs,
+    dropped: frozenset[str] = frozenset(),
+    drop_difficulty: bool = False,
+) -> str:
     """'(Using what I remember about you: easy trails.)': which remembered wishes this answer really used."""
 
     def kept(p: Prefs) -> str:
         return describe(
-            Prefs(p.difficulty, tuple(t for t in p.terms if t not in dropped), p.dogs, p.quiet)
+            Prefs(
+                None if drop_difficulty else p.difficulty,
+                tuple(t for t in p.terms if t not in dropped),
+                p.dogs,
+                p.quiet,
+                p.length,
+            )
         )
 
     parts = []
@@ -222,6 +242,8 @@ def _notes(state: AgentState) -> str:
         parts.append(LOCATION_NOTE)
     if state.get("relaxed"):
         parts.append(RELAXED_NOTE.format(difficulty=(_prefs(state).difficulty or "").lower()))
+    if state.get("relaxed_length"):
+        parts.append(LENGTH_NOTE.format(length=_prefs(state).length))
     if state.get("terms_dropped"):
         parts.append(DROPPED_NOTE.format(terms=" and ".join(state["terms_dropped"])))
     if state.get("memory_note"):
@@ -233,7 +255,11 @@ def _reply_prefs(state: AgentState) -> Prefs:
     """The wishes the reply should talk about: those that were really searched for."""
     prefs, dropped = _prefs(state), set(state.get("terms_dropped", []))
     return Prefs(
-        prefs.difficulty, tuple(t for t in prefs.terms if t not in dropped), prefs.dogs, prefs.quiet
+        None if state.get("difficulty_dropped") else prefs.difficulty,
+        tuple(t for t in prefs.terms if t not in dropped),
+        prefs.dogs,
+        prefs.quiet,
+        prefs.length,
     )
 
 
@@ -246,6 +272,7 @@ def build_agent_graph(
     checkpointer: Any = None,
 ):
     input_guard = make_input_guard(cfg)
+    limits = (settings.short_max_km, settings.long_min_km)
 
     @timed("triage")
     async def triage_node(state: AgentState) -> dict[str, Any]:
@@ -260,8 +287,22 @@ def build_agent_graph(
             route = {"more": "more", "pick": "pick"}.get(intent[0], "memory_cmd")
 
         turn = extract_prefs(message) if route == "agent" else Prefs()
+        # A filter dropped earlier (no match) is suppressed until the user asks for that kind of thing again,
+        # so a learned/saved preference cannot silently reapply itself turn after turn.
+        dismissed = set(memory.get("dismissed", []))
+        if turn.difficulty:
+            dismissed.discard("difficulty")
+        if turn.length:
+            dismissed.discard("length")
+        memory["dismissed"] = sorted(dismissed)
+        if dismissed:
+            saved, session = without(saved, *dismissed), without(session, *dismissed)
         effective = merge_prefs(merge_prefs(saved, session), turn)
-        if route == "agent" and is_vague(message) and effective.is_empty:
+        if (
+            route == "agent"
+            and effective.is_empty
+            and (is_vague(message) or only_preference_words(message))
+        ):
             route = "clarify"  # nothing to search for, and nothing remembered to go on: ask
         if route == "agent":
             memory["prefs"] = merge_prefs(session, turn).to_dict()
@@ -409,6 +450,11 @@ def build_agent_graph(
         ]  # carry remembered features into the query
         query = " ".join([base, *extra])
         difficulty = [prefs.difficulty] if prefs.difficulty else None
+        # "short" / "long" are real filters on the distance every trail has (limits come from the data)
+        bounds: tuple[float | None, float | None] = {
+            "short": (None, settings.short_max_km),
+            "long": (settings.long_min_km, None),
+        }.get(prefs.length or "", (None, None))
         started = time.perf_counter()
         call: dict[str, Any] = {
             "name": "search_trails",
@@ -416,6 +462,7 @@ def build_agent_graph(
             "repaired": state.get("search_repaired", False),
             "mode": settings.search_mode,
             "difficulty": difficulty,
+            "length": prefs.length,
             "excluded": len(exclude),
         }
         write(
@@ -452,13 +499,21 @@ def build_agent_graph(
                 "tool_calls": [{**call, "ok": not error, "ms": done_ms()}],
             }
 
-        filter_only = is_filter_only(state["message"], prefs.difficulty)  # "show me easy ones"
+        filter_only = is_filter_only(
+            state["message"], prefs.difficulty, prefs.length
+        )  # "show me easy ones"
         typed_now = set(extract_prefs(state["message"]).terms)
         earlier = [
             t for t in extra if t not in typed_now
         ]  # carried over from earlier: these may be dropped
         dropped: list[str] = []
         relaxed = False
+        relaxed_length = False
+        typed = extract_prefs(state["message"])
+        difficulty_carried = (
+            bool(prefs.difficulty) and not typed.difficulty
+        )  # said earlier, not in this message
+        difficulty_dropped = False
 
         def best(found: list[TrailHit]) -> float:
             return max((h.score for h in found), default=0.0)
@@ -473,15 +528,32 @@ def build_agent_graph(
                 "terms": list(prefs.terms),
             }
 
-            async def attempt(q: str, diff: list[str] | None) -> list[TrailHit]:
-                return (await search.search(q, top_k=3, difficulty=diff, **kwargs)).results
+            async def attempt(
+                q: str,
+                diff: list[str] | None,
+                km: tuple[float | None, float | None] = bounds,
+            ) -> list[TrailHit]:
+                found = await search.search(
+                    q, top_k=3, difficulty=diff, min_km=km[0], max_km=km[1], **kwargs
+                )
+                return found.results
 
             hits = await attempt(query, difficulty)
-            if not hits and difficulty and not exclude:
-                # no trail has that rating: say so and show the closest matches instead of nothing
-                hits = await attempt(query, None)
-                relaxed = bool(hits)
-            if earlier and not relaxed and below(hits):
+            if not hits and not exclude:
+                # Nothing fits ALL the filters ("short" and "hard": no such trail). Loosen one at a time and
+                # say which: first the length, then the difficulty. Better than showing nothing.
+                if difficulty and difficulty_carried and typed.length:
+                    # "something short" after "hard": the carried-over Hard is what to give up, not the new word
+                    hits = await attempt(query, None)
+                    relaxed = difficulty_dropped = bool(hits)
+                if not hits and bounds != (None, None):
+                    hits = await attempt(query, difficulty, (None, None))
+                    relaxed_length = bool(hits)
+                if not hits and difficulty:
+                    hits = await attempt(query, None, (None, None))
+                    relaxed, relaxed_length = bool(hits), False
+                    difficulty_dropped = relaxed and difficulty_carried
+            if earlier and not relaxed and not relaxed_length and below(hits):
                 # Remembered features can pull the search away from what was just asked ("alpine" + "easy" matches
                 # nothing). Try again with only what was asked now; keep that if it is a real match, or (for a
                 # request that is only a filter) simply a better one. Then say what was left out.
@@ -520,13 +592,16 @@ def build_agent_graph(
             "hits": [h.model_dump() for h in hits],
             "allowed_numbers": allowed_numbers(hits),
             "relaxed": relaxed,
+            "relaxed_length": relaxed_length,
+            "difficulty_dropped": difficulty_dropped,
             "terms_dropped": dropped,
             "memory_note": memory_note_text(
                 Prefs.from_dict((state.get("memory_used") or {}).get("saved", {})),
                 Prefs.from_dict((state.get("memory_used") or {}).get("earlier", {})),
                 frozenset(dropped),
+                difficulty_dropped,
             )
-            if dropped
+            if dropped or difficulty_dropped
             else state.get("memory_note", ""),
             "effective_query": query,
             "tool_calls": [
@@ -535,6 +610,7 @@ def build_agent_graph(
                     "ok": True,
                     "ms": done_ms(),
                     "relaxed": relaxed,
+                    "relaxed_length": relaxed_length,
                     "results": [h.slug for h in hits],
                 }
             ],
@@ -553,7 +629,7 @@ def build_agent_graph(
         if notes:
             write({"type": "token", "text": notes})
         if not settings.explain_with_llm:
-            body = explain_reply(hits, prefs)
+            body = explain_reply(hits, prefs, limits)
             write({"type": "token", "text": body})
             return {"reply": notes + body, "reply_source": "template", "decision": "recommend"}
 
@@ -565,7 +641,9 @@ def build_agent_graph(
                 parts.append(piece)
                 write({"type": "token", "text": piece})
         except Exception as exc:
-            reply = notes + explain_reply(hits, prefs)  # the facts still work without the model
+            reply = notes + explain_reply(
+                hits, prefs, limits
+            )  # the facts still work without the model
             write({"type": "replace", "text": reply})
             return {
                 "reply": reply,
@@ -584,12 +662,20 @@ def build_agent_graph(
             memory = _memory(state)
             slugs = [h.slug for h in hits]
             seen = (memory["seen"] if state.get("route") == "more" else []) + slugs
+            dismissed = set(memory.get("dismissed", []))
+            if state.get("difficulty_dropped") or state.get("relaxed"):
+                dismissed.add("difficulty")
+            if state.get("relaxed_length"):
+                dismissed.add("length")
+            memory["dismissed"] = sorted(dismissed)
             kept = [
                 t
                 for t in memory["prefs"].get("terms", [])
                 if t not in state.get("terms_dropped", [])
             ]
             memory["prefs"] = {**memory["prefs"], "terms": kept}
+            if state.get("difficulty_dropped"):
+                memory["prefs"]["difficulty"] = None
             update["memory"] = {
                 **memory,
                 "last_shown": slugs,
@@ -622,7 +708,7 @@ def build_agent_graph(
             ]
             if problems:
                 replacement = (
-                    explain_reply(hits, _prefs(state))
+                    explain_reply(hits, _reply_prefs(state), limits)
                     if hits
                     else USER_MESSAGES["ungrounded_numbers"]
                 )

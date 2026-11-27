@@ -4,7 +4,7 @@ Used when the request is too vague (ask), when two trails are nearly tied (compa
 and as the fallback when the model cannot write an explanation.
 """
 
-from trailmate_agent.prefs import Prefs, describe
+from trailmate_agent.prefs import LONG_MIN_KM, SHORT_MAX_KM, Prefs, describe
 from trailmate_agent.tools import TrailHit, TrailInfo
 
 CLARIFY_QUESTION = (
@@ -21,6 +21,9 @@ NO_MATCH = (
 NO_MORE = "I don't have any more close matches for this search. Want to change something, like the difficulty or what you'd like to see?"
 DROPPED_NOTE = "Note: I found no good match for {terms} together with that, so I left {terms} out of this search."
 RELAXED_NOTE = "Note: I found no {difficulty} trails for this, so these are the closest matches of any difficulty."
+LENGTH_NOTE = (
+    "Note: I found no {length} trails with that, so these are the closest matches of any length."
+)
 REMEMBER_HELP = 'I can remember things like "I prefer easy trails" or "I love waterfalls". Try: remember that I prefer easy trails.'
 NEED_USER = "I can't save preferences without a user id, so nothing was saved. (The chat client sends one; see --user.)"
 RESET_REPLY = "Okay, starting fresh. What kind of trail are you after?"
@@ -80,7 +83,9 @@ def disambiguation_reply(tied: list[TrailHit]) -> str:
     return f"{header}\n{lines}\n{differences} Tell me which sounds closer to what you want and I'll narrow it down."
 
 
-def fit(hit: TrailHit, prefs: Prefs) -> tuple[list[str], list[tuple[str, str]]]:
+def fit(
+    hit: TrailHit, prefs: Prefs, limits: tuple[float, float] = (SHORT_MAX_KM, LONG_MIN_KM)
+) -> tuple[list[str], list[tuple[str, str]]]:
     """What a trail matches and misses, judged ONLY from its facts and the words its description contains.
     -> (matched statements, [(short label, explanation)] for what it misses)."""
     matched: list[str] = []
@@ -91,6 +96,13 @@ def fit(hit: TrailHit, prefs: Prefs) -> tuple[list[str], list[tuple[str, str]]]:
             matched.append(f"{label}: it is rated {hit.facts.difficulty}")
         else:
             missed.append((label, f"{label} (it is rated {hit.facts.difficulty})"))
+    if prefs.length:
+        km = hit.facts.distance_km
+        fits = km <= limits[0] if prefs.length == "short" else km >= limits[1]
+        if fits:
+            matched.append(f"{prefs.length}: it is {km:g} km")
+        else:
+            missed.append((prefs.length, f"{prefs.length} (it is {km:g} km)"))
     for term in prefs.terms:
         if term in hit.terms_found:
             matched.append(f"{term}: its description mentions it")
@@ -99,11 +111,13 @@ def fit(hit: TrailHit, prefs: Prefs) -> tuple[list[str], list[tuple[str, str]]]:
     return matched, missed
 
 
-def explain_reply(hits: list[TrailHit], prefs: Prefs) -> str:
+def explain_reply(
+    hits: list[TrailHit], prefs: Prefs, limits: tuple[float, float] = (SHORT_MAX_KM, LONG_MIN_KM)
+) -> str:
     """The recommendation, built by code from retrieved facts. It says why a trail fits, what it does NOT
     match, and what the data cannot tell us. Nothing here comes from a model, so nothing can be invented."""
     best = hits[0]
-    matched, missed = fit(best, prefs)
+    matched, missed = fit(best, prefs, limits)
     lines = [f"Best match: {best.name} ({facts_line(best)})."]
     lines.append(
         "Why it fits: "
@@ -121,7 +135,7 @@ def explain_reply(hits: list[TrailHit], prefs: Prefs) -> str:
     if len(hits) > 1:
         others = []
         for hit in hits[1:3]:
-            _, hit_missed = fit(hit, prefs)
+            _, hit_missed = fit(hit, prefs, limits)
             extra = (
                 ("; not matched: " + ", ".join(label for label, _ in hit_missed))
                 if hit_missed
@@ -147,6 +161,7 @@ def asked_for(learned: dict | None) -> str:
     if not learned:
         return ""
     items = [(f"{d.lower()} trails", n) for d, n in (learned.get("difficulty") or {}).items()]
+    items += [(f"{d} trails", n) for d, n in (learned.get("length") or {}).items()]
     items += list((learned.get("terms") or {}).items())
     for key, label in (("dogs", "dog-friendly"), ("quiet", "quiet")):
         if learned.get(key):

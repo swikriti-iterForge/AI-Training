@@ -106,28 +106,42 @@ class ScriptedLLM:
 class FakeSearch:
     """Stands in for the search service. `hits` is a list, or a function (difficulty, exclude) -> list."""
 
-    def __init__(self, hits=CLEAR, fail=False, trails=None, by_query=None):
-        self.hits, self.fail, self.by_query = hits, fail, by_query
+    def __init__(self, hits=CLEAR, fail=False, trails=None, by_query=None, by_call=None):
+        self.hits, self.fail, self.by_query, self.by_call = hits, fail, by_query, by_call
         self.queries, self.calls = [], []
         self.trails = trails or {
             h.slug: TrailInfo(slug=h.slug, name=h.name, tagline=f"{h.name} tagline.", facts=h.facts)
             for h in [*CLEAR, BLACKROCK]
         }
 
-    async def search(self, query, top_k=3, *, mode=None, difficulty=None, exclude=None, terms=None):
+    async def search(
+        self,
+        query,
+        top_k=3,
+        *,
+        mode=None,
+        difficulty=None,
+        exclude=None,
+        terms=None,
+        min_km=None,
+        max_km=None,
+    ):
         self.queries.append((query, top_k))
-        self.calls.append(
-            {
-                "query": query,
-                "mode": mode,
-                "difficulty": difficulty,
-                "exclude": exclude,
-                "terms": terms,
-            }
-        )
+        call = {
+            "query": query,
+            "mode": mode,
+            "difficulty": difficulty,
+            "exclude": exclude,
+            "terms": terms,
+            "min_km": min_km,
+            "max_km": max_km,
+        }
+        self.calls.append(call)
         if self.fail:
             raise SearchUnavailable("connection refused")
-        if self.by_query:
+        if self.by_call:
+            hits = self.by_call(call)
+        elif self.by_query:
             hits = self.by_query(query, difficulty, exclude)
         else:
             hits = self.hits(difficulty, exclude) if callable(self.hits) else self.hits

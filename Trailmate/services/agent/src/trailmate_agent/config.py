@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     learn_automatically: bool = True
     # How often something must be asked for before it counts as a USUAL preference. 2 is a starting guess.
     min_mentions: int = 2
+    # What 'short' and 'long' mean, in km. From this data: every Easy trail is <= 4.0 and every Hard trail >= 8.2.
+    short_max_km: float = 4.0
+    long_min_km: float = 8.0
     # Saved chat history: one file per conversation (git-ignored)
     conversation_dir: Path = DEFAULT_CONVERSATION_DIR
     # Optional JSON file overriding guardrail rules (see guardrails.GuardrailConfig)

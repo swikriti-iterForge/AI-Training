@@ -125,7 +125,7 @@ FILLER_WORDS = set(
     spot spots trip outing trail trails trailhead hike hikes hiking hiker trek treks trekking walk walks
     walking route routes path paths option options idea ideas
     okay ok yes yeah yep sure alright fine then now just only also and but so why how what instead rather
-    maybe perhaps try let lets not no too very really bit slightly""".split()
+    maybe perhaps try let lets not no too very really bit slightly hi hello hey hiya bro buddy mate dude""".split()
 )
 
 

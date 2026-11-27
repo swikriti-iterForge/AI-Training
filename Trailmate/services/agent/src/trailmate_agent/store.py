@@ -29,7 +29,7 @@ class PreferenceStore(Protocol):
 
 
 def _empty_counts() -> dict[str, Any]:
-    return {"requests": 0, "difficulty": {}, "terms": {}, "dogs": 0, "quiet": 0}
+    return {"requests": 0, "difficulty": {}, "length": {}, "terms": {}, "dogs": 0, "quiet": 0}
 
 
 class FilePreferenceStore:
@@ -53,27 +53,29 @@ class FilePreferenceStore:
         os.replace(tmp, self._path)  # a crash mid-write can never leave a half-written file
 
     # ---- what is "known" ----
+    def _favourite(self, counts: dict[str, int]) -> str | None:
+        """The value asked for most, if it was asked for at least `min_mentions` times and beats all others together."""
+        if not counts:
+            return None
+        best, top = max(counts.items(), key=lambda kv: kv[1])
+        return (
+            best if top >= self._min and top > sum(counts.values()) - top else None
+        )  # a clear favourite
+
     def _known(self, entry: dict) -> Prefs:
         explicit = Prefs.from_dict(entry)
         counts = {**_empty_counts(), **entry.get("counts", {})}
-        diff = counts["difficulty"]
-        usual_difficulty = None
-        if diff:
-            best, top = max(diff.items(), key=lambda kv: kv[1])
-            if (
-                top >= self._min and top > sum(diff.values()) - top
-            ):  # a clear favourite, not a coin toss
-                usual_difficulty = best
         usual_terms = tuple(
             t
             for t, n in sorted(counts["terms"].items(), key=lambda kv: (-kv[1], kv[0]))
             if n >= self._min
         )[:3]
         return Prefs(
-            difficulty=explicit.difficulty or usual_difficulty,
+            difficulty=explicit.difficulty or self._favourite(counts["difficulty"]),
             terms=explicit.terms or usual_terms,
             dogs=explicit.dogs or counts["dogs"] >= self._min,
             quiet=explicit.quiet or counts["quiet"] >= self._min,
+            length=explicit.length or self._favourite(counts["length"]),
         )
 
     # ---- the store interface ----
@@ -105,6 +107,8 @@ class FilePreferenceStore:
                 counts["difficulty"][turn.difficulty] = (
                     counts["difficulty"].get(turn.difficulty, 0) + 1
                 )
+            if turn.length:
+                counts["length"][turn.length] = counts["length"].get(turn.length, 0) + 1
             for term in turn.terms:
                 counts["terms"][term] = counts["terms"].get(term, 0) + 1
             counts["dogs"] += int(turn.dogs)

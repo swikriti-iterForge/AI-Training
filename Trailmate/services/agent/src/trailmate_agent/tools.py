@@ -84,6 +84,8 @@ class TrailSearch(Protocol):
         difficulty: list[str] | None = None,
         exclude: list[str] | None = None,
         terms: list[str] | None = None,
+        min_km: float | None = None,
+        max_km: float | None = None,
     ) -> SearchResults: ...
 
     async def get_trail(self, slug: str) -> TrailInfo: ...
@@ -104,6 +106,8 @@ class HttpTrailSearch:
         difficulty: list[str] | None = None,
         exclude: list[str] | None = None,
         terms: list[str] | None = None,
+        min_km: float | None = None,
+        max_km: float | None = None,
     ) -> SearchResults:
         payload: dict[str, Any] = {"query": query, "top_k": top_k}
         for key, value in (
@@ -111,8 +115,12 @@ class HttpTrailSearch:
             ("difficulty", difficulty),
             ("exclude", exclude),
             ("terms", terms),
+            ("min_distance_km", min_km),
+            ("max_distance_km", max_km),
         ):
-            if value:  # only send what is set, so an older search service still understands us
+            if (
+                value is not None and value != []
+            ):  # only send what is set, so an older search service still understands us
                 payload[key] = value
         try:
             response = await self._client.post("/search", json=payload)

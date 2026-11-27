@@ -7,7 +7,8 @@ the one thing that is genuinely open-ended: what to search for.
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from typing import Any
 
 from trailmate_agent.routing import FILLER_WORDS, LOCATION_RE
 
@@ -72,6 +73,22 @@ QUIET_WORDS = {
     "peaceful",
 }
 OPPOSITE = {"Easy": "Hard", "Hard": "Easy"}
+# How long a trail is. Every trail has a distance, so "short" and "long" are real filters, not search words.
+# The limits come from this data: every Easy trail is <= 4.0 km and every Hard trail is >= 8.2 km, with clear gaps.
+LENGTH_WORDS = {
+    "short": "short",
+    "shorter": "short",
+    "quick": "short",
+    "brief": "short",
+    "long": "long",
+    "longer": "long",
+    "lengthy": "long",
+    "full-day": "long",
+    "all-day": "long",
+}
+LENGTH_OPPOSITE = {"short": "long", "long": "short"}
+SHORT_MAX_KM = 4.0
+LONG_MIN_KM = 8.0
 
 
 @dataclass(frozen=True)
@@ -80,10 +97,11 @@ class Prefs:
     terms: tuple[str, ...] = ()
     dogs: bool = False
     quiet: bool = False
+    length: str | None = None  # short | long
 
     @property
     def is_empty(self) -> bool:
-        return not (self.difficulty or self.terms or self.dogs or self.quiet)
+        return not (self.difficulty or self.terms or self.dogs or self.quiet or self.length)
 
     def to_dict(self) -> dict:
         return {
@@ -91,6 +109,7 @@ class Prefs:
             "terms": list(self.terms),
             "dogs": self.dogs,
             "quiet": self.quiet,
+            "length": self.length,
         }
 
     @staticmethod
@@ -100,6 +119,7 @@ class Prefs:
             terms=tuple(str(t) for t in data.get("terms", [])),
             dogs=bool(data.get("dogs")),
             quiet=bool(data.get("quiet")),
+            length=data.get("length") or None,
         )
 
 
@@ -107,28 +127,30 @@ def _words(text: str) -> list[str]:
     return re.findall(r"[a-z][a-z'-]*", text.lower())
 
 
-def extract_prefs(message: str) -> Prefs:
-    """Difficulty, features and flags in ONE message. 'not too hard' means easy; 'not easy' means hard."""
-    words = _words(message)
+def _level(words: list[str], table: dict[str, str], opposite: dict[str, str]) -> str | None:
+    """The ONE level these words ask for, or None. 'not too hard' means easy; 'easy or hard' means no preference."""
     found: set[str] = set()
     for i, word in enumerate(words):
-        level = DIFFICULTY_WORDS.get(word)
-        if level is None:
+        value = table.get(word)
+        if value is None:
             continue
         before = words[max(0, i - 3) : i]
-        negated = any(w in {"not", "no", "never"} or w.endswith("n't") for w in before)
-        if negated:
-            level = OPPOSITE.get(level)  # 'not moderate' says nothing useful
-        if level:
-            found.add(level)
-    terms = tuple(dict.fromkeys(FEATURE_WORDS[w] for w in words if w in FEATURE_WORDS))
+        if any(w in {"not", "no", "never"} or w.endswith("n't") for w in before):
+            value = opposite.get(value)  # 'not moderate' says nothing useful
+        if value:
+            found.add(value)
+    return next(iter(found)) if len(found) == 1 else None
+
+
+def extract_prefs(message: str) -> Prefs:
+    """Difficulty, length, features and flags in ONE message."""
+    words = _words(message)
     return Prefs(
-        difficulty=next(iter(found))
-        if len(found) == 1
-        else None,  # 'easy or hard' is no preference
-        terms=terms,
+        difficulty=_level(words, DIFFICULTY_WORDS, OPPOSITE),
+        terms=tuple(dict.fromkeys(FEATURE_WORDS[w] for w in words if w in FEATURE_WORDS)),
         dogs=any(w in DOG_WORDS for w in words),
         quiet=any(w in QUIET_WORDS for w in words),
+        length=_level(words, LENGTH_WORDS, LENGTH_OPPOSITE),
     )
 
 
@@ -140,6 +162,7 @@ def merge_prefs(base: Prefs, new: Prefs) -> Prefs:
         terms=new.terms or base.terms,
         dogs=base.dogs or new.dogs,
         quiet=base.quiet or new.quiet,
+        length=new.length or base.length,
     )
 
 
@@ -150,6 +173,7 @@ def minus(a: Prefs, b: Prefs) -> Prefs:
         terms=a.terms if a.terms and not b.terms else (),
         dogs=a.dogs and not b.dogs,
         quiet=a.quiet and not b.quiet,
+        length=a.length if a.length and not b.length else None,
     )
 
 
@@ -157,6 +181,8 @@ def describe(p: Prefs) -> str:
     parts = []
     if p.difficulty:
         parts.append(f"{p.difficulty.lower()} trails")
+    if p.length:
+        parts.append(f"{p.length} trails")
     parts += list(p.terms)
     if p.dogs:
         parts.append("dog-friendly")
@@ -177,13 +203,37 @@ def states_preference(message: str) -> bool:
     return bool(_STANDING.search(message)) and "?" not in message
 
 
-def is_filter_only(message: str, difficulty: str | None) -> bool:
-    """'okay show some easy ones': it says HOW HARD, but nothing about WHAT to see. The difficulty filter IS the
-    request, and a content-free query scores low against everything, so a low similarity must not mean "refuse"."""
-    if not difficulty:
+def is_filter_only(message: str, difficulty: str | None = None, length: str | None = None) -> bool:
+    """'okay show some easy ones' / 'short and challenging': it says HOW HARD or HOW LONG, but nothing about WHAT
+    to see. The filters ARE the request, and a content-free query scores low against everything, so a low
+    similarity must not mean "refuse"."""
+    if not (difficulty or length):
         return False
+    return only_preference_words(message)
+
+
+def only_preference_words(message: str) -> bool:
+    """True if, besides filler, the message uses only words we can actually filter by (difficulty, length,
+    dogs) or that we can never verify anyway ('quiet', 'peaceful': not a data field). Such a message must
+    never be refused for a low search score, because there is nothing left for the search to score well on."""
     words = re.findall(r"[a-z][a-z'-]*", message.lower())
-    return not [w for w in words if w not in FILLER_WORDS and w not in DIFFICULTY_WORDS]
+    harmless = (
+        FILLER_WORDS | DIFFICULTY_WORDS.keys() | LENGTH_WORDS.keys() | DOG_WORDS | QUIET_WORDS
+    )
+    return not [w for w in words if w not in harmless]
+
+
+def without(p: Prefs, *fields: str) -> Prefs:
+    """`p` with the named fields cleared back to their default (used to suppress a dropped preference)."""
+    defaults: dict[str, Any] = {
+        "difficulty": None,
+        "length": None,
+        "terms": (),
+        "dogs": False,
+        "quiet": False,
+    }
+    changes = {f: defaults[f] for f in fields}
+    return replace(p, **changes)  # type: ignore[arg-type]
 
 
 # ---------- follow-up commands ----------
