@@ -185,6 +185,7 @@ what to search for. The model-written recommendation still exists (`TRAILMATE_EX
 | A Hard trail ranked 2nd for "easy"; an easy one ranked 1st for "hard scramble" | Difficulty is read from the request and applied as a filter. If no trail has that rating, the filter is dropped and you are told |
 | "Somewhere to clear my head" scored 0.14 and still got a confident answer | A relevance cutoff (`TRAILMATE_MIN_RELEVANCE`, default 0.25, **provisional**): weak matches get a question instead of a recommendation |
 | Writing the answer took 26-35 s | No second model call: one call to decide, then code |
+| "okay show some easy ones" after an alpine search was refused ("couldn't find a match"): the remembered "alpine, snow" were added to the new search, and a short request like "easy ones" scores low whatever it matches | A request that is only a filter (how hard, no subject) is never refused for a low score. Remembered features that make the search match nothing, or that no result mentions, are left out, and the reply says so |
 
 **Search modes** (`TRAILMATE_SEARCH_MODE`, default `vector`): `vector` (meaning), `keyword` (PostgreSQL full-text,
 with stemming), `hybrid` (both, fused with Reciprocal Rank Fusion). `score` is always the cosine similarity, so

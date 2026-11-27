@@ -18,7 +18,8 @@ NO_MATCH = (
     "I couldn't find a trail that matches that closely, and I'd rather not guess. "
     "What do you enjoy: easy or hard hikes, waterfalls, views, forest?"
 )
-NO_MORE = "That's everything I have for this search. Want to change something, like the difficulty or what you'd like to see?"
+NO_MORE = "I don't have any more close matches for this search. Want to change something, like the difficulty or what you'd like to see?"
+DROPPED_NOTE = "Note: I found no good match for {terms} together with that, so I left {terms} out of this search."
 RELAXED_NOTE = "Note: I found no {difficulty} trails for this, so these are the closest matches of any difficulty."
 REMEMBER_HELP = 'I can remember things like "I prefer easy trails" or "I love waterfalls". Try: remember that I prefer easy trails.'
 NEED_USER = "I can't save preferences without a user id, so nothing was saved. (The chat client sends one; see --user.)"

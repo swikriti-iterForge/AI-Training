@@ -123,7 +123,9 @@ FILLER_WORDS = set(
     find show suggest recommend give tell about some any good nice great best cool new another different
     something anything please can could help is are be do does it that this there one ones place places
     spot spots trip outing trail trails trailhead hike hikes hiking hiker trek treks trekking walk walks
-    walking route routes path paths option options idea ideas""".split()
+    walking route routes path paths option options idea ideas
+    okay ok yes yeah yep sure alright fine then now just only also and but so why how what instead rather
+    maybe perhaps try let lets not no too very really bit slightly""".split()
 )
 
 

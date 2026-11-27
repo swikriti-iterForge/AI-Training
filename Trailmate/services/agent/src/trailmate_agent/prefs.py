@@ -9,7 +9,7 @@ the one thing that is genuinely open-ended: what to search for.
 import re
 from dataclasses import dataclass
 
-from trailmate_agent.routing import LOCATION_RE
+from trailmate_agent.routing import FILLER_WORDS, LOCATION_RE
 
 DIFFICULTY_WORDS = {
     "easy": "Easy",
@@ -175,6 +175,15 @@ _STANDING = re.compile(
 
 def states_preference(message: str) -> bool:
     return bool(_STANDING.search(message)) and "?" not in message
+
+
+def is_filter_only(message: str, difficulty: str | None) -> bool:
+    """'okay show some easy ones': it says HOW HARD, but nothing about WHAT to see. The difficulty filter IS the
+    request, and a content-free query scores low against everything, so a low similarity must not mean "refuse"."""
+    if not difficulty:
+        return False
+    words = re.findall(r"[a-z][a-z'-]*", message.lower())
+    return not [w for w in words if w not in FILLER_WORDS and w not in DIFFICULTY_WORDS]
 
 
 # ---------- follow-up commands ----------

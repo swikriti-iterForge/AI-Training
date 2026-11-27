@@ -28,6 +28,7 @@ from pydantic import ValidationError
 
 from trailmate_agent.answers import (
     CLARIFY_QUESTION,
+    DROPPED_NOTE,
     FORGET_REPLY,
     LOCATION_NOTE,
     NEED_USER,
@@ -62,6 +63,7 @@ from trailmate_agent.prefs import (
     describe,
     extract_prefs,
     follow_up,
+    is_filter_only,
     merge_prefs,
     minus,
     place_names,
@@ -93,7 +95,11 @@ class AgentState(State, total=False):
     allowed_numbers: list[float]  # measurements the reply may mention
     turn_prefs: dict[str, Any]  # what applies to THIS turn: saved + earlier in chat + this message
     memory_note: str  # tells the user which remembered preferences were used
+    memory_used: dict[str, Any]  # the remembered wishes behind memory_note (so it can be rebuilt)
     relaxed: bool  # True if no trail matched the difficulty, so it was dropped
+    terms_dropped: list[
+        str
+    ]  # remembered features left out because they made the search match nothing
     tool_calls: Annotated[list[dict[str, Any]], add_lists]  # what the agent called, for tracing
     memory: dict[str, Any]  # PERSISTS between turns of a session (see default_memory)
 
@@ -125,7 +131,9 @@ def fresh_turn(message: str, tier: str, user_id: str | None) -> dict[str, Any]:
         "allowed_numbers": [],
         "turn_prefs": {},
         "memory_note": "",
+        "memory_used": {},
         "relaxed": False,
+        "terms_dropped": [],
         "trace": None,
         "timings": None,
         "tool_calls": None,  # None = reset these accumulating fields
@@ -191,6 +199,22 @@ def _memory(state: AgentState) -> dict[str, Any]:
     return {**default_memory(), **(state.get("memory") or {})}
 
 
+def memory_note_text(saved: Prefs, earlier: Prefs, dropped: frozenset[str] = frozenset()) -> str:
+    """'(Using what I remember about you: easy trails.)': which remembered wishes this answer really used."""
+
+    def kept(p: Prefs) -> str:
+        return describe(
+            Prefs(p.difficulty, tuple(t for t in p.terms if t not in dropped), p.dogs, p.quiet)
+        )
+
+    parts = []
+    if kept(saved):
+        parts.append(f"what I remember about you: {kept(saved)}")
+    if kept(earlier):
+        parts.append(f"what you said earlier: {kept(earlier)}")
+    return f"(Using {'; '.join(parts)}.)" if parts else ""
+
+
 def _notes(state: AgentState) -> str:
     """Honest notes shown before the answer: no locations in the data, a dropped filter, remembered wishes."""
     parts = []
@@ -198,9 +222,19 @@ def _notes(state: AgentState) -> str:
         parts.append(LOCATION_NOTE)
     if state.get("relaxed"):
         parts.append(RELAXED_NOTE.format(difficulty=(_prefs(state).difficulty or "").lower()))
+    if state.get("terms_dropped"):
+        parts.append(DROPPED_NOTE.format(terms=" and ".join(state["terms_dropped"])))
     if state.get("memory_note"):
         parts.append(state["memory_note"])
     return "\n".join(parts) + "\n\n" if parts else ""
+
+
+def _reply_prefs(state: AgentState) -> Prefs:
+    """The wishes the reply should talk about: those that were really searched for."""
+    prefs, dropped = _prefs(state), set(state.get("terms_dropped", []))
+    return Prefs(
+        prefs.difficulty, tuple(t for t in prefs.terms if t not in dropped), prefs.dogs, prefs.quiet
+    )
 
 
 def build_agent_graph(
@@ -235,22 +269,21 @@ def build_agent_graph(
                 # learn from what was asked, without being told to "remember" (counted; see store.py)
                 store.learn(user_id, turn, strong=states_preference(message))
 
-        note = ""
+        note, used = "", {}
         if route in ("agent", "more"):
-            saved_used = describe(minus(saved, merge_prefs(session, turn)))
-            earlier_used = describe(minus(session, turn))
-            parts = []
-            if saved_used:
-                parts.append(f"what I remember about you: {saved_used}")
-            if earlier_used:
-                parts.append(f"what you said earlier: {earlier_used}")
-            note = f"(Using {'; '.join(parts)}.)" if parts else ""
+            saved_used, earlier_used = (
+                minus(saved, merge_prefs(session, turn)),
+                minus(session, turn),
+            )
+            used = {"saved": saved_used.to_dict(), "earlier": earlier_used.to_dict()}
+            note = memory_note_text(saved_used, earlier_used)
         return {
             "route": route,
             "category": route,
             "memory": memory,
             "turn_prefs": effective.to_dict(),
             "memory_note": note,
+            "memory_used": used,
             "decision": route if route in ("chat", "reject") else "",
         }
 
@@ -419,28 +452,59 @@ def build_agent_graph(
                 "tool_calls": [{**call, "ok": not error, "ms": done_ms()}],
             }
 
+        filter_only = is_filter_only(state["message"], prefs.difficulty)  # "show me easy ones"
+        typed_now = set(extract_prefs(state["message"]).terms)
+        earlier = [
+            t for t in extra if t not in typed_now
+        ]  # carried over from earlier: these may be dropped
+        dropped: list[str] = []
+        relaxed = False
+
+        def best(found: list[TrailHit]) -> float:
+            return max((h.score for h in found), default=0.0)
+
+        def below(found: list[TrailHit]) -> bool:  # empty counts as below
+            return best(found) < settings.min_relevance
+
         try:
             kwargs: dict[str, Any] = {
                 "mode": settings.search_mode,
                 "exclude": exclude,
                 "terms": list(prefs.terms),
             }
-            found = await search.search(query, top_k=3, difficulty=difficulty, **kwargs)
-            relaxed = False
-            if not found.results and difficulty and not exclude:
+
+            async def attempt(q: str, diff: list[str] | None) -> list[TrailHit]:
+                return (await search.search(q, top_k=3, difficulty=diff, **kwargs)).results
+
+            hits = await attempt(query, difficulty)
+            if not hits and difficulty and not exclude:
                 # no trail has that rating: say so and show the closest matches instead of nothing
-                found = await search.search(query, top_k=3, difficulty=None, **kwargs)
-                relaxed = bool(found.results)
+                hits = await attempt(query, None)
+                relaxed = bool(hits)
+            if earlier and not relaxed and below(hits):
+                # Remembered features can pull the search away from what was just asked ("alpine" + "easy" matches
+                # nothing). Try again with only what was asked now; keep that if it is a real match, or (for a
+                # request that is only a filter) simply a better one. Then say what was left out.
+                narrower = " ".join([base, *[t for t in extra if t in typed_now]])
+                retry = await attempt(narrower, difficulty)
+                if retry and (not below(retry) or (filter_only and best(retry) > best(hits))):
+                    hits, dropped, query = retry, list(earlier), narrower
+                    call["query"] = narrower
         except SearchUnavailable as exc:
             return stop(SEARCH_UNAVAILABLE, "error", "fallback", f"SearchUnavailable: {exc}"[:300])
 
-        hits = found.results
+        if earlier and not dropped and hits:
+            if not any(set(earlier) & set(h.terms_found) for h in hits):
+                dropped = list(
+                    earlier
+                )  # no result mentions it; showing "not matched" under every trail is just noise
+
         if not hits:
             return stop(NO_MORE if exclude else NO_RESULTS, "no_match")
-        if max(h.score for h in hits) < settings.min_relevance:
-            return stop(
-                NO_MORE if exclude else NO_MATCH, "no_match"
-            )  # a weak match is not an answer
+        if (
+            below(hits) and not filter_only
+        ):  # a weak match is not an answer (unless the filter IS the request)
+            return stop(NO_MORE if exclude else NO_MATCH, "no_match")
 
         write(
             {
@@ -456,6 +520,14 @@ def build_agent_graph(
             "hits": [h.model_dump() for h in hits],
             "allowed_numbers": allowed_numbers(hits),
             "relaxed": relaxed,
+            "terms_dropped": dropped,
+            "memory_note": memory_note_text(
+                Prefs.from_dict((state.get("memory_used") or {}).get("saved", {})),
+                Prefs.from_dict((state.get("memory_used") or {}).get("earlier", {})),
+                frozenset(dropped),
+            )
+            if dropped
+            else state.get("memory_note", ""),
             "effective_query": query,
             "tool_calls": [
                 {
@@ -477,7 +549,7 @@ def build_agent_graph(
     @timed("write_answer")
     async def write_answer(state: AgentState) -> dict[str, Any]:
         write = get_stream_writer()
-        hits, prefs, notes = _hits(state), _prefs(state), _notes(state)
+        hits, prefs, notes = _hits(state), _reply_prefs(state), _notes(state)
         if notes:
             write({"type": "token", "text": notes})
         if not settings.explain_with_llm:
@@ -512,6 +584,12 @@ def build_agent_graph(
             memory = _memory(state)
             slugs = [h.slug for h in hits]
             seen = (memory["seen"] if state.get("route") == "more" else []) + slugs
+            kept = [
+                t
+                for t in memory["prefs"].get("terms", [])
+                if t not in state.get("terms_dropped", [])
+            ]
+            memory["prefs"] = {**memory["prefs"], "terms": kept}
             update["memory"] = {
                 **memory,
                 "last_shown": slugs,

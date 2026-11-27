@@ -106,8 +106,8 @@ class ScriptedLLM:
 class FakeSearch:
     """Stands in for the search service. `hits` is a list, or a function (difficulty, exclude) -> list."""
 
-    def __init__(self, hits=CLEAR, fail=False, trails=None):
-        self.hits, self.fail = hits, fail
+    def __init__(self, hits=CLEAR, fail=False, trails=None, by_query=None):
+        self.hits, self.fail, self.by_query = hits, fail, by_query
         self.queries, self.calls = [], []
         self.trails = trails or {
             h.slug: TrailInfo(slug=h.slug, name=h.name, tagline=f"{h.name} tagline.", facts=h.facts)
@@ -127,7 +127,10 @@ class FakeSearch:
         )
         if self.fail:
             raise SearchUnavailable("connection refused")
-        hits = self.hits(difficulty, exclude) if callable(self.hits) else self.hits
+        if self.by_query:
+            hits = self.by_query(query, difficulty, exclude)
+        else:
+            hits = self.hits(difficulty, exclude) if callable(self.hits) else self.hits
         return SearchResults(query=query, results=hits)
 
     async def get_trail(self, slug):
