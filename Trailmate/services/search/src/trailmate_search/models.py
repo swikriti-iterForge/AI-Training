@@ -9,8 +9,8 @@ Spring/JPA comparison: each class is an @Entity. `Vector(384)` is a pgvector col
 from decimal import Decimal
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy import Computed, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import ARRAY, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 EMBEDDING_DIM = 384
@@ -38,7 +38,10 @@ class Trail(Base):
 
 class Chunk(Base):
     __tablename__ = "chunks"
-    __table_args__ = (UniqueConstraint("trail_id", "strategy", "position", name="uq_chunk_slot"),)
+    __table_args__ = (
+        UniqueConstraint("trail_id", "strategy", "position", name="uq_chunk_slot"),
+        Index("ix_chunks_tsv", "tsv", postgresql_using="gin"),  # makes keyword search fast
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     trail_id: Mapped[int] = mapped_column(ForeignKey("trails.id", ondelete="CASCADE"), index=True)
@@ -51,3 +54,6 @@ class Chunk(Base):
         Text
     )  # exactly what was embedded (name + section + text)
     embedding = mapped_column(Vector(EMBEDDING_DIM))
+    # Keyword search: PostgreSQL keeps this column up to date by itself from embedded_text.
+    # `english` makes "crowded" and "crowds" both match "crowd" (stemming) and ignores words like "the".
+    tsv = mapped_column(TSVECTOR, Computed("to_tsvector('english', embedded_text)", persisted=True))

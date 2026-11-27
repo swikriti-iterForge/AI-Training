@@ -48,7 +48,12 @@ async def test_ingest_leaves_database_untouched_when_embedder_fails(session_fact
 
 
 async def test_health_counts(client):
-    assert (await client.get("/health")).json() == {"status": "ok", "trails": 16, "chunks": 51}
+    assert (await client.get("/health")).json() == {
+        "status": "ok",
+        "trails": 16,
+        "chunks": 51,
+        "default_mode": "vector",
+    }
 
 
 async def test_search_returns_distinct_trails_best_first(client):

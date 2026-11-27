@@ -1,0 +1,10 @@
+[
+  {"id": "n1", "query": "somewhere to clear my head", "note": "vague and emotional; the weak match we saw in the first real agent run"},
+  {"id": "n2", "query": "where can I buy hiking boots"},
+  {"id": "n3", "query": "best restaurant near the trailhead"},
+  {"id": "n4", "query": "history of the Appalachian Trail"},
+  {"id": "n5", "query": "ski resort with chairlifts"},
+  {"id": "n6", "query": "scuba diving spots"},
+  {"id": "n7", "query": "what camping stove should I buy"},
+  {"id": "n8", "query": "a quiet cafe to read a book"}
+]

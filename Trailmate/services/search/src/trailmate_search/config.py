@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     data_dir: Path = DEFAULT_DATA_DIR
     embedding_dim: int = 384  # must match the embedding model (all-MiniLM-L6-v2 = 384)
     default_strategy: str = "section"  # which chunking strategy to search (see chunks.strategy)
+    default_mode: str = "vector"  # vector | keyword | hybrid. Switch to hybrid once eval/check_queries.py --compare says so
 
     @property
     def sync_database_url(self) -> str:
