@@ -165,6 +165,18 @@ def describe(p: Prefs) -> str:
     return ", ".join(parts)
 
 
+# "I love waterfalls", "I always prefer easy trails": a standing preference, not a one-off request.
+# "I want an easy hike" is only a request, so it is counted, not assumed.
+_STANDING = re.compile(
+    r"\bi (?:really |always |usually |generally |mostly )?(?:prefer|like|love|enjoy)\b|\bi always\b|\bmy (?:favou?rite|usual)\b",
+    re.IGNORECASE,
+)
+
+
+def states_preference(message: str) -> bool:
+    return bool(_STANDING.search(message)) and "?" not in message
+
+
 # ---------- follow-up commands ----------
 _MORE = re.compile(
     r"(?:please )?(?:(?:show|give|get|see) )?(?:me )?(?:(?:some|any) )?(?:more|other|another|different)"
@@ -183,7 +195,10 @@ def follow_up(message: str, has_shown: bool) -> tuple[str, int | None] | None:
     ):
         return ("forget", None)
     if re.search(
-        r"\bwhat (?:do|did) you (?:remember|know) about me\b|\b(?:my|saved) preferences\b|\bwhat have you saved\b",
+        r"\bwhat (?:do|did) you (?:remember|know) about me\b|\b(?:my|saved) preferences\b|\bwhat have you saved\b"
+        r"|\bdo you (?:know|remember) what (?:kind of |type of |sort of )?(?:trails?|hikes?|treks?|things?)? ?i (?:like|prefer|love|enjoy)\b"
+        r"|\bwhat (?:kind of |type of )?(?:trails?|hikes?|treks?) do i (?:like|prefer|love|enjoy)\b"
+        r"|\bdo you (?:know|remember) me\b",
         text,
     ):
         return ("recall", None)

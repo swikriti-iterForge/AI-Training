@@ -17,6 +17,7 @@ from agent_fakes import (
     agent,
     event,
     hit,
+    tmp_conversations,
 )
 from httpx import ASGITransport, AsyncClient
 from test_graph_api import done, names, streamed_text
@@ -474,14 +475,14 @@ async def test_remember_saves_and_a_new_session_uses_it_transparently():
     assert c.search.calls[-1]["difficulty"] == ["Easy"] and c.search.calls[-1]["terms"] == [
         "waterfall"
     ]
-    assert "(Using your saved preferences: easy trails, waterfall.)" in streamed_text(events)
+    assert "(Using what I remember about you: easy trails, waterfall.)" in streamed_text(events)
 
 
 async def test_what_do_you_remember_and_forget():
     c = Conversation()
     assert "not remembering anything" in streamed_text(await c.say("what do you remember about me"))
     await c.say("remember that I prefer hard trails")
-    assert "Saved for you: hard trails." in streamed_text(
+    assert "What I remember about you: hard trails." in streamed_text(
         await c.say("what do you remember about me")
     )
     assert streamed_text(await c.say("forget my preferences")) == FORGET_REPLY
@@ -520,9 +521,15 @@ async def test_saved_preferences_belong_to_one_user():
 async def test_memory_endpoints_show_and_erase():
     store = InMemoryStore()
     store.save("alice", Prefs(difficulty="Easy", terms=("lake",)))
-    app = create_app(llm=ScriptedLLM(), settings=Settings(), search=FakeSearch(), store=store)
+    app = create_app(
+        llm=ScriptedLLM(),
+        settings=Settings(),
+        search=FakeSearch(),
+        store=store,
+        conversations=tmp_conversations(),
+    )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        assert (await client.get("/memory/alice")).json() == {
+        assert (await client.get("/memory/alice")).json()["known"] == {
             "difficulty": "Easy",
             "terms": ["lake"],
             "dogs": False,
@@ -530,7 +537,7 @@ async def test_memory_endpoints_show_and_erase():
         }
         assert (await client.delete("/memory/alice")).json() == {"deleted": True}
         assert (await client.delete("/memory/alice")).json() == {"deleted": False}
-        assert (await client.get("/memory/alice")).json()["difficulty"] is None
+        assert (await client.get("/memory/alice")).json()["known"]["difficulty"] is None
         assert (await client.get(f"/memory/{'x' * 65}")).status_code == 422
 
 

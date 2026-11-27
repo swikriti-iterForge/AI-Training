@@ -360,6 +360,9 @@ async def test_agent_graph_endpoint_lists_the_agent_nodes():
     "message, expected",
     [
         ("Hello!", "chat"),
+        ("Hi bro how are you", "chat"),  # answered by the "how are you" reply, not the greeting
+        ("kya bhai", "agent"),  # unknown, not about trails: the model decides
+        ("kesa AI hai re tu", "agent"),
         ("thanks", "chat"),
         ("what can you do?", "chat"),
         ("bye", "chat"),

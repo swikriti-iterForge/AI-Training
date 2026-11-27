@@ -12,7 +12,8 @@ frontend → observability. **Python only** (FastAPI, LangGraph, pgvector, LiteL
 | 2A | Embedder, pgvector, ingestion, vector search, query validation | ✅ done. Real model, 10/12 on the test queries (baseline) |
 | 2B | Hybrid search (keyword + vector, RRF) | built; **not yet measured on the real model**: run `python eval/check_queries.py --compare`. Reranker, chunking comparison and Precision/MRR report: dropped (no problem seen) |
 | 3A | Agent mode: search tool, rules-first routing, clarifying question, tie comparison, code-built explanations, difficulty filter, relevance cutoff | built, 199 agent tests; fixes from the first real-model test applied. **Needs your re-test** |
-| 3B | Memory: short-term (the conversation) and long-term (saved preferences); "show me more", "the second one" | built, same service. **Needs your test** |
+| 3B | Memory: learns automatically (per name), saved chat history, "what do you know about me", forget | built, same service. **Needs your test** |
+| 3 UI | Chat page served by the agent at `/` | built; checked by running its real JavaScript against the real server in a simulated browser. **Needs a look in your real browser** |
 | 4 | React frontend and dashboard | |
 | 5 | Langfuse, structlog, metrics | |
 
@@ -190,6 +191,110 @@ with stemming), `hybrid` (both, fused with Reciprocal Rank Fusion). `score` is a
 the cutoff and tie checks mean the same thing in every mode. Don't switch the default until
 `python eval/check_queries.py --compare` shows hybrid is clearly better on the real model.
 
+**Memory.** It learns automatically, per name, and you stay in control.
+
+| | Short-term | Long-term |
+|---|---|---|
+| What | the conversation: difficulty and features so far, which trails were shown | what it learned about you |
+| How | automatic | automatic: every search request is counted; asked for at least 2 times (`TRAILMATE_MIN_MENTIONS`) means a **usual preference**; a standing statement ("I love waterfalls", "remember that I prefer easy trails") counts at once. A one-off request is counted, never assumed |
+| Where | LangGraph checkpointer, one thread per user and session (RAM). After a restart it is restored from the saved chat | `data/memory/preferences.json`, one entry per name |
+| Use | "show me more" (skips what was shown), "the second one", "something harder" (keeps your waterfall) | applied when a request doesn't say otherwise, and the reply says so: "(Using what I remember about you: easy trails.)" |
+| Control | `start over` | ask "what do you know about me" / "do you know what trails I like"; `forget my preferences`; the **What I remember** box; the **Remember me** switch (off = nothing is saved or learned); `TRAILMATE_LEARN_AUTOMATICALLY=false`; `GET`/`DELETE /memory/{user_id}` |
+
+A new topic replaces the old features, a refinement keeps them. Difficulty carries over until you change it.
+
+**Chat history.** With a name set (and Remember me on), every conversation is saved to
+`data/memory/chats/<name>/<chat>.json`: the messages, the trail cards, and the session memory. Reopen one from the
+sidebar and carry on, even after a restart ("show me more" still knows what you saw). API:
+`GET /conversations/{user}`, `GET`/`DELETE /conversations/{user}/{chat}`, `DELETE /conversations/{user}`.
+Everything is plain files you can open and delete. **Not authenticated**: anyone who knows a name can read that name's
+chats and memory. Fine locally, not for production. Names cannot contain slashes or start with a dot, so they can never
+point outside the data folder.
+
+**Run it** (four terminals; start from the Trailmate folder, `docker compose up -d db` first):
+
+```powershell
+# A. Embedder. The first `uv sync` is large (it installs PyTorch) and the first start downloads a ~90 MB model
+cd services\embedder
+uv sync
+uv run uvicorn trailmate_embedder.main:app --port 8001      # wait for "Application startup complete"
+
+# B. Search: create tables, load the 16 trails, start the service
+cd services\search
+uv sync
+uv run alembic upgrade head
+uv run python -m trailmate_search.ingest                    # expect: Ingested 16 trails as 51 chunks
+uv run uvicorn trailmate_search.main:app --port 8002
+
+# C. Validate against the 10 provided test queries + the 2 near-duplicate pair queries
+python eval/check_queries.py
+```
+
+Try it by hand: open http://localhost:8002/docs, or `GET http://localhost:8002/trails/cascade-falls-loop`.
+`GET /health` shows how many trails and chunks are loaded.
+
+**How it works**
+
+1. **Chunking (`parsing.py`):** each trail file is split by its `##` headings into chunks. Each chunk is prefixed with
+   the trail name and section before embedding ("Cascade Falls Loop - Trail Notes: ..."), so a chunk's vector stays
+   tied to *which* trail it belongs to. That is what keeps the near-duplicate trails apart.
+2. **Facts vs text:** difficulty, distance, elevation, "best for" and dogs policy are parsed into real columns and
+   returned as `facts`. Later, the agent states these from the database, never from the LLM.
+3. **Search (`main.py`):** embed the query, compare it with every chunk using cosine distance, keep only the best chunk
+   per trail (`DISTINCT ON`), return the top trails with the matching text as evidence.
+4. The chunk table has a `strategy` column so Stage 2B can store other chunking strategies side by side.
+
+At 51 chunks an exact scan is instant, so there is no ANN index (HNSW). It would not help here, because the
+one-chunk-per-trail rule needs the exact scan. At a much larger scale you would add one and de-duplicate afterwards.
+
+**Troubleshooting**
+
+| Symptom | Fix |
+|---|---|
+| Embedder fails while downloading the model with a certificate error | Company-proxy certificates again. Tell me the exact error. |
+| `uv sync` in `services\embedder` is very slow | Normal the first time: it downloads PyTorch. |
+| `alembic upgrade head` can't connect | `docker compose up -d db`, and wait until `docker compose ps` shows `healthy` |
+| `ingest` says it cannot reach the embedder | Terminal A isn't running or hasn't finished starting |
+| `check_queries.py` says HTTP 503 | The search service can't reach the embedder on port 8001 |
+
+Tests: `uv run pytest -q` inside `services\embedder` (no database needed) and `services\search` (needs the `db` container;
+they use a separate `trailmate_search_test` database and skip with a message if Postgres isn't running).
+
+## Stage 3: the agent, with memory (Phase 3)
+
+A second graph beside the Phase 1 workflow. Same message, two modes, so you can compare them:
+`--mode workflow` (default, Phase 1: generic text, no trail data) and `--mode agent` (Phase 3).
+
+```
+message -> input_guard -> triage --chat / reject--------> templated reply
+                            |-- remember / forget / "what do you remember" / start over --> memory_cmd
+                            |-- "the second one" --> show_details     |-- "show me more" --> prepare_more --+
+                            |-- too vague (and nothing remembered) --> ONE clarifying question              |
+                            '-- otherwise --> decide (MODEL: what to search for) --> run_search <-----------+
+                                    run_search: filters by difficulty, drops place names, refuses weak matches
+                                    tied? -> compare both (code)    else -> explanation built by code from the facts
+                            every reply -> output_guard -> END   (also saves what was shown, for "more")
+```
+
+**Who decides what.** Code: the obvious cases, whether a request is too vague, difficulty and features read from
+your words, whether results are tied, whether a match is too weak, the facts, and the explanation. The model:
+what to search for. The model-written recommendation still exists (`TRAILMATE_EXPLAIN_WITH_LLM=true`) but is off.
+
+**What the first real-model test changed.**
+
+| Seen in the test | Fix |
+|---|---|
+| The model said a trail was "near Mumbai" (the data has no locations) | The explanation is built by code, so it can't echo it. Place names are also removed from the search (they lowered the top score from 0.640 to 0.529) |
+| The model credited Blackrock Summit with a waterfall it doesn't have | "Why it fits / Not matched" is computed from what each trail's text really contains (`terms_found` from the search service) |
+| A Hard trail ranked 2nd for "easy"; an easy one ranked 1st for "hard scramble" | Difficulty is read from the request and applied as a filter. If no trail has that rating, the filter is dropped and you are told |
+| "Somewhere to clear my head" scored 0.14 and still got a confident answer | A relevance cutoff (`TRAILMATE_MIN_RELEVANCE`, default 0.25, **provisional**): weak matches get a question instead of a recommendation |
+| Writing the answer took 26-35 s | No second model call: one call to decide, then code |
+
+**Search modes** (`TRAILMATE_SEARCH_MODE`, default `vector`): `vector` (meaning), `keyword` (PostgreSQL full-text,
+with stemming), `hybrid` (both, fused with Reciprocal Rank Fusion). `score` is always the cosine similarity, so
+the cutoff and tie checks mean the same thing in every mode. Don't switch the default until
+`python eval/check_queries.py --compare` shows hybrid is clearly better on the real model.
+
 **Memory.**
 
 | | Short-term | Long-term |
@@ -211,7 +316,7 @@ docker compose up -d db
 #                                    uv run uvicorn trailmate_search.main:app --port 8002
 # 3. LiteLLM    (Trailmate)          python scripts/start_litellm.py
 # 4. agent      (services\agent)     uv run uvicorn trailmate_agent.main:app
-# 5. talk       (Trailmate)          python scripts/chat.py -i --verbose        # a conversation, with memory
+# 5. talk       open http://localhost:8000/   (the chat UI)     or     python scripts/chat.py -i --verbose
 ```
 
 **Measure instead of guessing** (embedder and search running):
@@ -220,6 +325,25 @@ docker compose up -d db
 python eval/check_queries.py --compare     # vector vs keyword vs hybrid on the 12 test queries
 python eval/check_cutoff.py                # where should the "no good match" cutoff sit?
 ```
+
+## Chat UI
+
+Start the agent and open **http://localhost:8000/** (use your port if it differs). It is one HTML file served by the
+agent itself, so there is nothing to install or build, and it needs no internet.
+
+- Type a message or click a suggestion. The answer **streams in as it is written**; while the agent works you see
+  "Searching hiking trails..." and, on the first request after idle, a note that the model is waking up (about 20 s).
+- Trails appear as **cards** (difficulty, distance, climb, best for, dogs) with facts straight from the database.
+  **Tell me more** asks for that trail; **Show me more** asks for the next ones. Buttons on older results switch
+  themselves off, because "the second one" always means the latest list.
+- **Sidebar:** your saved chats (click to reopen, x to delete: it asks twice) and **What I remember** (what it knows
+  about you, with a **Forget** button). On a phone it opens with the **History** button.
+- **Header:** Mode (Agent, or the Phase 1 Workflow for comparison), Model tier, **Name** (chats and memory are saved
+  under it), **Remember me** (untick to chat without saving or learning anything), Debug, New chat.
+- A refresh reopens the chat the tab was in. Errors say what happened and offer **Try again**.
+- Text from the model or from you is always inserted as plain text, never as HTML.
+
+The UI talks only to this server (`/chat`, `/health`, `/conversations`, `/memory`). Page tests: `services/agent/tests/test_ui.py`.
 
 ## Dataset (`data/`)
 

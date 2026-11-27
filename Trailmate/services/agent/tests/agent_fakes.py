@@ -1,13 +1,17 @@
 """Shared test doubles for the agent tests: a scripted model, a fake search service, an in-memory
 preference store, and helpers to run one message or a whole conversation through the real API and graph."""
 
+import tempfile
+from pathlib import Path
+
 from httpx import ASGITransport, AsyncClient
 from test_graph_api import parse_sse
 
 from trailmate_agent.config import Settings
+from trailmate_agent.conversations import FileConversationStore
 from trailmate_agent.llm import Completion, ToolCall
 from trailmate_agent.main import create_app
-from trailmate_agent.prefs import Prefs
+from trailmate_agent.store import FilePreferenceStore
 from trailmate_agent.tools import Facts, SearchResults, SearchUnavailable, TrailHit, TrailInfo
 
 
@@ -132,29 +136,31 @@ class FakeSearch:
         return self.trails[slug]
 
 
-class InMemoryStore:
-    """The PreferenceStore protocol without a file."""
+class InMemoryStore(FilePreferenceStore):
+    """The REAL preference store, writing to a throwaway folder, so the tests exercise the real counting logic."""
 
-    def __init__(self):
-        self.data: dict[str, Prefs] = {}
+    def __init__(self, min_mentions=2):
+        super().__init__(Path(tempfile.mkdtemp()) / "preferences.json", min_mentions)
 
-    def load(self, user_id):
-        return self.data.get(user_id, Prefs())
-
-    def save(self, user_id, prefs):
-        self.data[user_id] = prefs
-
-    def delete(self, user_id):
-        return self.data.pop(user_id, None) is not None
+    @property
+    def data(self):
+        return self._read()
 
 
-async def agent(llm, search, message, *, llm_writer=True, store=None, settings=None, **extra):
+def tmp_conversations():
+    return FileConversationStore(Path(tempfile.mkdtemp()) / "chats")
+
+
+async def agent(
+    llm, search, message, *, llm_writer=True, store=None, conversations=None, settings=None, **extra
+):
     """One message through agent mode. llm_writer=True lets the model write the answer (the opt-in path)."""
     app = create_app(
         llm=llm,
         settings=settings or Settings(explain_with_llm=llm_writer),
         search=search,
         store=store or InMemoryStore(),
+        conversations=conversations or tmp_conversations(),
     )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/chat", json={"message": message, "mode": "agent", **extra})
@@ -165,12 +171,30 @@ class Conversation:
     """Several turns through ONE app, so the session memory is real. Uses the real default settings."""
 
     def __init__(
-        self, llm=None, search=None, *, store=None, settings=None, user_id="u1", session_id="s1"
+        self,
+        llm=None,
+        search=None,
+        *,
+        store=None,
+        conversations=None,
+        settings=None,
+        user_id="u1",
+        session_id="s1",
     ):
         self.llm, self.search = llm or ScriptedLLM(), search or FakeSearch()
         self.store, self.user_id, self.session_id = store or InMemoryStore(), user_id, session_id
-        self.app = create_app(
-            llm=self.llm, settings=settings or Settings(), search=self.search, store=self.store
+        self.conversations = conversations or tmp_conversations()
+        self.settings = settings or Settings()
+        self.app = self.new_app()
+
+    def new_app(self):
+        """A fresh app on the SAME stores: what a server restart looks like (session memory in RAM is gone)."""
+        return create_app(
+            llm=self.llm,
+            settings=self.settings,
+            search=self.search,
+            store=self.store,
+            conversations=self.conversations,
         )
 
     async def say(self, message, *, session_id=None, user_id="__default__", **extra):

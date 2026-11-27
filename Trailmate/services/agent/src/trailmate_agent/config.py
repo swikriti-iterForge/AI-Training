@@ -9,6 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 DEFAULT_PREFERENCE_FILE = (
     Path(__file__).resolve().parents[4] / "data" / "memory" / "preferences.json"
 )
+DEFAULT_CONVERSATION_DIR = Path(__file__).resolve().parents[4] / "data" / "memory" / "chats"
 
 # Trailmate/.env: shared with scripts/start_litellm.py, so the proxy and the agent use ONE key.
 ROOT_ENV = Path(__file__).resolve().parents[4] / ".env"
@@ -51,6 +52,12 @@ class Settings(BaseSettings):
     explain_with_llm: bool = False
     # Long-term memory: what users asked us to remember (a plain JSON file; git-ignored)
     preference_file: Path = DEFAULT_PREFERENCE_FILE
+    # Learn from what users ask for (per user id). Turn off with TRAILMATE_LEARN_AUTOMATICALLY=false.
+    learn_automatically: bool = True
+    # How often something must be asked for before it counts as a USUAL preference. 2 is a starting guess.
+    min_mentions: int = 2
+    # Saved chat history: one file per conversation (git-ignored)
+    conversation_dir: Path = DEFAULT_CONVERSATION_DIR
     # Optional JSON file overriding guardrail rules (see guardrails.GuardrailConfig)
     guardrail_config_path: str | None = None
 

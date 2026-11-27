@@ -42,6 +42,12 @@ def test_known_limitation_keywords_miss_vague_requests():
         ("thank you", "thanks"),
         ("bye", "bye"),
         ("who are you", "about"),
+        ("Hi bro how are you", "howru"),  # a greeting must not swallow the rest of the message
+        ("how are you?", "howru"),
+        ("i asked how are you ?", "howru"),
+        ("hello there", "greeting"),
+        ("Good morning!", "greeting"),
+        ("hi bro show me something fun", "unknown"),  # not only a greeting: someone else decides
         ("blah blah", "unknown"),
     ],
 )

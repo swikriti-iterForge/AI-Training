@@ -65,6 +65,7 @@ from trailmate_agent.prefs import (
     merge_prefs,
     minus,
     place_names,
+    states_preference,
     strip_location,
 )
 from trailmate_agent.routing import is_vague, mentions_location, triage
@@ -230,6 +231,9 @@ def build_agent_graph(
             route = "clarify"  # nothing to search for, and nothing remembered to go on: ask
         if route == "agent":
             memory["prefs"] = merge_prefs(session, turn).to_dict()
+            if user_id and settings.learn_automatically and not turn.is_empty:
+                # learn from what was asked, without being told to "remember" (counted; see store.py)
+                store.learn(user_id, turn, strong=states_preference(message))
 
         note = ""
         if route in ("agent", "more"):
@@ -237,7 +241,7 @@ def build_agent_graph(
             earlier_used = describe(minus(session, turn))
             parts = []
             if saved_used:
-                parts.append(f"your saved preferences: {saved_used}")
+                parts.append(f"what I remember about you: {saved_used}")
             if earlier_used:
                 parts.append(f"what you said earlier: {earlier_used}")
             note = f"(Using {'; '.join(parts)}.)" if parts else ""
@@ -282,7 +286,8 @@ def build_agent_graph(
             memory = default_memory()
             reply = RESET_REPLY
         else:  # recall
-            reply = remembered_reply(saved, session)
+            learned = store.summary(user_id)["learned"] if user_id else None
+            reply = remembered_reply(saved, session, learned)
         get_stream_writer()({"type": "token", "text": reply})
         return {"reply": reply, "reply_source": "template", "decision": "memory", "memory": memory}
 

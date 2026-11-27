@@ -69,10 +69,13 @@ TRAIL_KEYWORDS = [
 ]
 
 CHAT_PATTERNS = {
-    "greeting": r"^\s*(hi|hello|hey|hiya|namaste|good (morning|afternoon|evening))\b",
+    # A greeting counts only when it is the WHOLE message ("hi", "hello there", "good morning").
+    # Matching just the start made "Hi bro how are you" get the greeting and ignore the question.
+    "greeting": r"^\s*(hi|hello|hey|hiya|namaste|good (morning|afternoon|evening))(\s+(there|bro|buddy|friend|all|everyone|guys|trailmate))?\W*$",
     "thanks": r"\b(thanks|thank you|thx|cheers|appreciate it)\b",
     "bye": r"\b(bye|goodbye|see you|see ya|talk later)\b",
     "about": r"\b(who are you|what are you|your name|what can you do|how do you work|help me|what do you do)\b",
+    "howru": r"\b(how are you|how r u|how's it going|hows it going|how do you do|how have you been|what's up|whats up)\b",
 }
 
 
@@ -100,6 +103,7 @@ CHAT_REPLIES = {
     "greeting": "Hi! I'm TrailMate, your hiking companion. Tell me what kind of hike you're after: easy or challenging, short or long, waterfalls or views.",
     "thanks": "You're welcome! Happy to help with more trails any time.",
     "bye": "Happy trails! Come back whenever you want to plan another hike.",
+    "howru": "I'm doing well, thanks for asking! I'm TrailMate, and I help you find a hiking trail. Tell me what you're after: easy or challenging, short or long, waterfalls or views.",
     "about": 'I\'m TrailMate. I help you find a hiking trail that fits what you\'re looking for. Try: "an easy trail near water" or "a hard hike with a big view".',
     "unknown": "I'm built to help with hiking trails, so I'm not sure about that one. Tell me what kind of hike you want and I'll help.",
 }

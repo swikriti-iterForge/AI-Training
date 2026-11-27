@@ -6,6 +6,7 @@ Two modes run the same message through different graphs, so you can compare them
 
 SSE events (every path emits the same core sequence, so the client has one code path):
   meta     {request_id, tier, mode, session_id}    first. Send session_id back to continue the conversation
+                                                   (with a user_id, the conversation is also saved: see /conversations)
   route    {path, reason}                          which branch the message took
   tool     {name, status, label, ms?}              agent mode: tool activity ("Searching hiking trails...")
   results  {trails: [...]}                         agent mode: the retrieved trails, with facts from the database
@@ -21,26 +22,31 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path as FilePath
 from typing import Annotated, Any, Literal
 
 from fastapi import FastAPI, HTTPException, Path, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from trailmate_agent.agent_graph import build_agent_graph, fresh_turn
+from trailmate_agent.answers import asked_for
 from trailmate_agent.config import Settings, get_settings
+from trailmate_agent.conversations import ConversationStore, FileConversationStore
 from trailmate_agent.graph import build_graph
 from trailmate_agent.guardrails import load_config
+from trailmate_agent.ids import ID_PATTERN
 from trailmate_agent.llm import LiteLLMClient, LLMClient
+from trailmate_agent.prefs import Prefs, describe
 from trailmate_agent.store import FilePreferenceStore, PreferenceStore
 from trailmate_agent.tools import HttpTrailSearch, TrailSearch
 
 logger = logging.getLogger("trailmate.agent")
 
+STATIC_DIR = FilePath(__file__).parent / "static"
 Mode = Literal["workflow", "agent"]
-ID_PATTERN = r"^[A-Za-z0-9_.-]{1,64}$"  # session and user ids: short, simple, safe to use as keys
 
 
 class ChatRequest(BaseModel):
@@ -70,11 +76,13 @@ def create_app(
     settings: Settings | None = None,
     search: TrailSearch | None = None,
     store: PreferenceStore | None = None,
+    conversations: ConversationStore | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
     llm = llm or LiteLLMClient(settings)
     search = search or HttpTrailSearch(settings.search_url, settings.search_timeout_s)
-    store = store or FilePreferenceStore(settings.preference_file)
+    store = store or FilePreferenceStore(settings.preference_file, settings.min_mentions)
+    conversations = conversations or FileConversationStore(settings.conversation_dir)
     guardrails = load_config(settings.guardrail_config_path)
     graphs = {
         "workflow": build_graph(llm, guardrails),
@@ -90,6 +98,11 @@ def create_app(
 
     app = FastAPI(title="TrailMate agent", version="0.2.0", lifespan=lifespan)
 
+    @app.get("/", include_in_schema=False)
+    async def chat_page() -> FileResponse:
+        """The chat UI: one HTML file that talks to POST /chat on this same server (so no CORS needed)."""
+        return FileResponse(STATIC_DIR / "index.html", media_type="text/html")
+
     @app.get("/health")
     async def health() -> dict[str, Any]:
         return {
@@ -99,14 +112,47 @@ def create_app(
             "modes": list(graphs),
         }
 
+    UserId = Annotated[str, Path(pattern=ID_PATTERN)]
+    SessionId = Annotated[str, Path(pattern=ID_PATTERN)]
+
     @app.get("/memory/{user_id}")
-    async def show_memory(user_id: Annotated[str, Path(pattern=ID_PATTERN)]) -> dict[str, Any]:
-        """What the agent has saved for this user (only what they asked it to remember)."""
-        return store.load(user_id).to_dict()
+    async def show_memory(user_id: UserId) -> dict[str, Any]:
+        """What the agent knows about this user: `known` (applied by default), `explicit` (they said so) and
+        `learned` (how often they asked for each thing)."""
+        summary = store.summary(user_id)
+        return {
+            **summary,
+            "known_text": describe(
+                Prefs.from_dict(summary["known"])
+            ),  # ready to show: "easy trails, waterfall"
+            "asked_text": asked_for(
+                summary["learned"]
+            ),  # "waterfall (4 times), easy trails (3 times)"
+        }
 
     @app.delete("/memory/{user_id}")
-    async def erase_memory(user_id: Annotated[str, Path(pattern=ID_PATTERN)]) -> dict[str, bool]:
+    async def erase_memory(user_id: UserId) -> dict[str, bool]:
         return {"deleted": store.delete(user_id)}
+
+    @app.get("/conversations/{user_id}")
+    async def list_conversations(user_id: UserId) -> list[dict[str, Any]]:
+        """This user's saved chats, newest first."""
+        return conversations.list_chats(user_id)
+
+    @app.get("/conversations/{user_id}/{session_id}")
+    async def get_conversation(user_id: UserId, session_id: SessionId) -> dict[str, Any]:
+        chat = conversations.get(user_id, session_id)
+        if chat is None:
+            raise HTTPException(404, "No such conversation")
+        return chat
+
+    @app.delete("/conversations/{user_id}/{session_id}")
+    async def delete_conversation(user_id: UserId, session_id: SessionId) -> dict[str, bool]:
+        return {"deleted": conversations.delete(user_id, session_id)}
+
+    @app.delete("/conversations/{user_id}")
+    async def delete_all_conversations(user_id: UserId) -> dict[str, int]:
+        return {"deleted": conversations.delete_all(user_id)}
 
     @app.get("/graph", response_class=PlainTextResponse)
     async def graph_diagram(mode: Mode = "workflow") -> str:
@@ -125,12 +171,24 @@ def create_app(
         session_id = body.session_id or uuid.uuid4().hex[:12]
         if body.mode == "agent":
             turn_input: dict[str, Any] = fresh_turn(body.message, tier, body.user_id)
-            run_config: dict[str, Any] = {"configurable": {"thread_id": session_id}}
+            # the thread id includes the user, so one user can never continue another user's session
+            run_config: dict[str, Any] = {
+                "configurable": {"thread_id": f"{body.user_id or '-'}:{session_id}"}
+            }
         else:
             turn_input, run_config = {"message": body.message, "tier": tier}, {}
 
         async def events() -> AsyncIterator[dict[str, str]]:
             started = time.perf_counter()
+            if body.mode == "agent" and body.user_id and body.session_id:
+                # A reopened chat after a restart: its session memory (what was shown, preferences so far)
+                # was lost with the RAM, so restore it from the saved conversation.
+                if not (await graph.aget_state(run_config)).values:
+                    saved = conversations.get(body.user_id, body.session_id)
+                    if saved and saved.get("memory"):
+                        await graph.aupdate_state(
+                            run_config, {"memory": saved["memory"]}, as_node="output_guard"
+                        )
             yield sse(
                 "meta",
                 {
@@ -163,6 +221,21 @@ def create_app(
                 logger.exception("request %s failed", request_id)
                 yield sse("error", {"message": "Something went wrong on our side."})
                 return
+            if body.mode == "agent" and body.user_id:
+                shown = final.get("decision") in ("recommend", "disambiguate")
+                try:
+                    conversations.append_turn(
+                        body.user_id,
+                        session_id,
+                        body.message,
+                        final.get("reply", ""),
+                        final.get("hits") if shown else None,
+                        final.get("memory"),
+                    )
+                except OSError:
+                    logger.exception(
+                        "could not save conversation %s", session_id
+                    )  # chatting must not break
             total_ms = round((time.perf_counter() - started) * 1000, 1)
             logger.info(
                 "request %s %s/%s via %s in %sms",

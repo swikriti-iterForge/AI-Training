@@ -23,7 +23,10 @@ RELAXED_NOTE = "Note: I found no {difficulty} trails for this, so these are the 
 REMEMBER_HELP = 'I can remember things like "I prefer easy trails" or "I love waterfalls". Try: remember that I prefer easy trails.'
 NEED_USER = "I can't save preferences without a user id, so nothing was saved. (The chat client sends one; see --user.)"
 RESET_REPLY = "Okay, starting fresh. What kind of trail are you after?"
-FORGET_REPLY = "Done. I've forgotten your saved preferences and what you told me in this chat."
+FORGET_REPLY = (
+    "Done. I've forgotten what I learned about you and what you told me in this chat. "
+    "Your saved chats stay until you delete them from the history list."
+)
 
 
 def facts_line(hit: TrailHit) -> str:
@@ -134,10 +137,34 @@ def details_reply(info: TrailInfo) -> str:
     return f"{head}\n{f.difficulty}, {f.distance_km:g} km, {f.elevation_gain_m} m climb. Best for: {', '.join(f.best_for)}. Dogs: {f.dogs_allowed}."
 
 
-def remembered_reply(saved: Prefs, session: Prefs) -> str:
+def _times(n: int) -> str:
+    return "once" if n == 1 else f"{n} times"
+
+
+def asked_for(learned: dict | None) -> str:
+    """'easy trails (3 times), waterfall (2 times)': what this user has asked for so far."""
+    if not learned:
+        return ""
+    items = [(f"{d.lower()} trails", n) for d, n in (learned.get("difficulty") or {}).items()]
+    items += list((learned.get("terms") or {}).items())
+    for key, label in (("dogs", "dog-friendly"), ("quiet", "quiet")):
+        if learned.get(key):
+            items.append((label, learned[key]))
+    items.sort(key=lambda kv: (-kv[1], kv[0]))
+    return ", ".join(f"{name} ({_times(n)})" for name, n in items[:6])
+
+
+def remembered_reply(known: Prefs, session: Prefs, learned: dict | None = None) -> str:
     parts = []
-    if not saved.is_empty:
-        parts.append(f"Saved for you: {describe(saved)}.")
+    if not known.is_empty:
+        parts.append(f"What I remember about you: {describe(known)}.")
+    seen = asked_for(learned)
+    if seen:
+        parts.append(f"So far you've asked for: {seen}.")
     if not session.is_empty:
-        parts.append(f"From this chat: {describe(session)}.")
-    return " ".join(parts) if parts else "I'm not remembering anything about you yet."
+        parts.append(f"In this chat: {describe(session)}.")
+    return (
+        " ".join(parts)
+        if parts
+        else "I'm not remembering anything about you yet. I learn from what you ask for."
+    )
